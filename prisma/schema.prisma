@@ -1,0 +1,330 @@
+// ════════════════════════════════════════════════════════════════════
+//  Esquema de base de datos — Estudio de maquillaje y peinado
+//  Postgres + Prisma. Todas las fechas se guardan en UTC; la zona
+//  horaria del negocio vive en Settings.timezone y la conversión se
+//  hace en la capa de servicio (src/lib/time.js).
+// ════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ────────────────────────────────────────────────────────────
+
+enum Role {
+  CLIENT
+  ADMIN
+}
+
+enum ServiceCategory {
+  MAQUILLAJE
+  PEINADO
+  PAQUETE
+}
+
+enum BookingStatus {
+  PENDING // creada por el cliente, a la espera de confirmación
+  CONFIRMED // confirmada por la maquilladora
+  COMPLETED // servicio prestado (habilita el sello de fidelidad)
+  CANCELLED
+  NO_SHOW
+}
+
+enum PaymentMethod {
+  TRANSFERENCIA
+  EFECTIVO
+}
+
+enum DiscountType {
+  PERCENT
+  AMOUNT
+}
+
+/// Tema visual del sitio publico. Solo lo cambia la administradora
+/// desde el panel: las visitantes no tienen selector.
+enum SiteTheme {
+  LIGHT
+  DARK
+  HALLOWEEN
+}
+
+enum RewardStatus {
+  AVAILABLE
+  REDEEMED
+  EXPIRED
+}
+
+// ── Usuarios y sesiones ─────────────────────────────────────────────
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  passwordHash   String
+  fullName       String
+  phone          String?
+  role           Role     @default(CLIENT)
+  marketingOptIn Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  bookings      Booking[]
+  loyaltyCard   LoyaltyCard?
+  refreshTokens RefreshToken[]
+  grantedStamps LoyaltyStamp[] @relation("StampGrantedBy")
+
+  @@index([role])
+}
+
+/// Solo se guarda el hash del refresh token: si la base se filtra,
+/// los tokens siguen sin ser utilizables.
+model RefreshToken {
+  id           String    @id @default(cuid())
+  userId       String
+  tokenHash    String    @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?
+  userAgent    String?
+  ip           String?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ── Catálogo ────────────────────────────────────────────────────────
+
+model Service {
+  id               String          @id @default(cuid())
+  slug             String          @unique
+  name             String
+  category         ServiceCategory
+  shortDescription String
+  description      String
+  durationMinutes  Int
+  priceCents       Int
+  currency         String          @default("COP")
+  active           Boolean         @default(true)
+  featured         Boolean         @default(false)
+  sortOrder        Int             @default(0)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  images    ServiceImage[]
+  bookings  Booking[]
+  occasions ServiceOccasion[]
+
+  @@index([category, active])
+}
+
+model ServiceImage {
+  id        String @id @default(cuid())
+  serviceId String
+  url       String
+  alt       String
+  sortOrder Int    @default(0)
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId])
+}
+
+/// "Para cada ocasión": bodas, quinceañeros, grados, etc.
+model Occasion {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  tagline     String
+  description String
+  includes    String[] // viñetas de "qué incluye"
+  heroImage   String?
+  sortOrder   Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  services ServiceOccasion[]
+  bookings Booking[]
+}
+
+model ServiceOccasion {
+  serviceId  String
+  occasionId String
+
+  service  Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  occasion Occasion @relation(fields: [occasionId], references: [id], onDelete: Cascade)
+
+  @@id([serviceId, occasionId])
+  @@index([occasionId])
+}
+
+model Promotion {
+  id            String       @id @default(cuid())
+  title         String
+  description   String
+  code          String?      @unique
+  discountType  DiscountType @default(PERCENT)
+  discountValue Int
+  image         String?
+  startsAt      DateTime
+  endsAt        DateTime
+  active        Boolean      @default(true)
+  membersOnly   Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([active, startsAt, endsAt])
+}
+
+// ── Disponibilidad ──────────────────────────────────────────────────
+
+/// Horario semanal recurrente. weekday sigue la convención de Luxon:
+/// 1 = lunes ... 7 = domingo. startTime/endTime en formato "HH:mm",
+/// interpretados en la zona horaria del negocio.
+model AvailabilityRule {
+  id        String   @id @default(cuid())
+  weekday   Int
+  startTime String
+  endTime   String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([weekday, active])
+}
+
+/// Bloqueos puntuales: día no laborable completo o una franja concreta.
+model TimeBlock {
+  id        String   @id @default(cuid())
+  startAt   DateTime
+  endAt     DateTime
+  allDay    Boolean  @default(false)
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([startAt, endAt])
+}
+
+// ── Reservas ────────────────────────────────────────────────────────
+
+model Booking {
+  id            String        @id @default(cuid())
+  /// Código corto legible para que un invitado consulte su reserva.
+  code          String        @unique
+  serviceId     String
+  occasionId    String?
+  /// Null cuando la reserva se hizo como invitado (sin cuenta).
+  userId        String?
+  customerName  String
+  customerEmail String
+  customerPhone String
+  notes         String?
+  adminNotes    String?
+  startAt       DateTime
+  endAt         DateTime
+  status        BookingStatus @default(PENDING)
+  paymentMethod PaymentMethod
+  priceCents    Int
+  currency      String        @default("COP")
+  createdIp     String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  confirmedAt   DateTime?
+  cancelledAt   DateTime?
+  completedAt   DateTime?
+
+  service  Service       @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  occasion Occasion?     @relation(fields: [occasionId], references: [id], onDelete: SetNull)
+  user     User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  stamp    LoyaltyStamp?
+
+  @@index([startAt])
+  @@index([status, startAt])
+  @@index([customerEmail])
+  @@index([userId])
+}
+
+// ── Fidelidad ───────────────────────────────────────────────────────
+
+model LoyaltyCard {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  /// Sellos del ciclo en curso (se reinicia al desbloquear recompensa).
+  stampsCurrent Int      @default(0)
+  /// Sellos históricos acumulados, nunca se reinicia.
+  stampsTotal   Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stamps  LoyaltyStamp[]
+  rewards LoyaltyReward[]
+}
+
+/// Un sello por servicio completado. Solo lo otorga la maquilladora
+/// desde el panel: nunca se genera automáticamente al crear la reserva.
+model LoyaltyStamp {
+  id          String   @id @default(cuid())
+  cardId      String
+  bookingId   String?  @unique
+  note        String?
+  grantedById String
+  createdAt   DateTime @default(now())
+
+  card      LoyaltyCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  booking   Booking?    @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  grantedBy User        @relation("StampGrantedBy", fields: [grantedById], references: [id], onDelete: Restrict)
+
+  @@index([cardId])
+}
+
+model LoyaltyReward {
+  id          String       @id @default(cuid())
+  cardId      String
+  description String
+  status      RewardStatus @default(AVAILABLE)
+  unlockedAt  DateTime     @default(now())
+  redeemedAt  DateTime?
+  createdAt   DateTime     @default(now())
+
+  card LoyaltyCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId, status])
+}
+
+// ── Ajustes del negocio (fila única, id = 1) ────────────────────────
+
+model Settings {
+  id                     Int      @id @default(1)
+  brandName              String   @default("Yury Enríquez")
+  tagline                String   @default("Makeup Artist")
+  aboutText              String   @default("")
+  contactEmail           String   @default("")
+  contactPhone           String   @default("")
+  whatsappNumber         String   @default("")
+  instagramUrl           String?
+  tiktokUrl              String?
+  facebookUrl            String?
+  addressLine            String   @default("")
+  mapUrl                 String?
+  businessHoursNote      String   @default("")
+  ownerNotificationEmail String   @default("")
+  transferInstructions   String   @default("")
+  theme                  SiteTheme @default(LIGHT)
+  timezone               String   @default("America/Bogota")
+  slotIntervalMinutes    Int      @default(30)
+  bufferMinutes          Int      @default(15)
+  minNoticeHours         Int      @default(12)
+  maxAdvanceDays         Int      @default(90)
+  stampsRequired         Int      @default(8)
+  rewardDescription      String   @default("Maquillaje social de cortesía")
+  updatedAt              DateTime @updatedAt
+}
