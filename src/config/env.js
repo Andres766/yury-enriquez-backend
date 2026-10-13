@@ -43,13 +43,14 @@ const schema = z
     COOKIE_DOMAIN: z.string().optional(),
     COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).default('lax'),
 
-    MAIL_DRIVER: z.enum(['console', 'smtp']).default('console'),
+    MAIL_DRIVER: z.enum(['console', 'smtp', 'resend']).default('console'),
     MAIL_FROM: z.string().default('Yury Enríquez <reservas@example.com>'),
     SMTP_HOST: z.string().optional(),
     SMTP_PORT: z.coerce.number().int().positive().optional(),
     SMTP_SECURE: bool(false),
     SMTP_USER: z.string().optional(),
     SMTP_PASS: z.string().optional(),
+    RESEND_API_KEY: z.string().optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.JWT_ACCESS_SECRET === cfg.JWT_REFRESH_SECRET) {
@@ -64,6 +65,13 @@ const schema = z
         code: z.ZodIssueCode.custom,
         message: 'Con MAIL_DRIVER=smtp hacen falta SMTP_HOST y SMTP_PORT',
         path: ['SMTP_HOST'],
+      });
+    }
+    if (cfg.MAIL_DRIVER === 'resend' && !cfg.RESEND_API_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Con MAIL_DRIVER=resend hace falta RESEND_API_KEY',
+        path: ['RESEND_API_KEY'],
       });
     }
     if (cfg.NODE_ENV === 'production') {

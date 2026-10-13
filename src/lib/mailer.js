@@ -7,9 +7,36 @@ import env from '../config/env.js';
  * Con MAIL_DRIVER=console (valor por defecto en desarrollo) los correos
  * se imprimen por consola: el flujo completo de reservas se puede probar
  * sin credenciales SMTP y sin riesgo de enviar correos reales durante
- * las pruebas. Con MAIL_DRIVER=smtp se usa el transporte real; las
- * credenciales viven solo en variables de entorno.
+ * las pruebas. Con MAIL_DRIVER=smtp se usa el transporte real; con
+ * MAIL_DRIVER=resend se envía por la API HTTP de Resend, para hostings
+ * que bloquean el SMTP saliente (Render Free). Las credenciales viven
+ * solo en variables de entorno.
  */
+
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+
+async function sendWithResend({ to, subject, html, text, replyTo }) {
+  const res = await fetch(RESEND_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: env.MAIL_FROM,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html,
+      text,
+      reply_to: replyTo || undefined,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Resend ${res.status}: ${body.message ?? res.statusText}`);
+  return { messageId: body.id };
+}
 
 let transporter = null;
 
@@ -39,14 +66,17 @@ export async function sendMail({ to, subject, html, text, replyTo }) {
   if (!to) return { ok: false, error: 'destinatario vacío' };
 
   try {
-    const info = await getTransporter().sendMail({
-      from: env.MAIL_FROM,
-      to,
-      subject,
-      html,
-      text,
-      replyTo,
-    });
+    const info =
+      env.MAIL_DRIVER === 'resend'
+        ? await sendWithResend({ to, subject, html, text, replyTo })
+        : await getTransporter().sendMail({
+            from: env.MAIL_FROM,
+            to,
+            subject,
+            html,
+            text,
+            replyTo,
+          });
 
     if (env.MAIL_DRIVER === 'console') {
       console.log('\n──────── CORREO (modo consola) ────────');
