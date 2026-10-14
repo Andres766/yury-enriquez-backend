@@ -25,6 +25,16 @@ const LIVE_STATUSES = ['PENDING', 'CONFIRMED', 'COMPLETED'];
  */
 const CALENDAR_LOCK_KEY = 848120260;
 
+/**
+ * Opciones de las transacciones que toman el bloqueo de la agenda.
+ *
+ * Con el bloqueo, las peticiones por el mismo hueco hacen fila. Con los
+ * valores por defecto de Prisma (2 s para empezar, 5 s en total) las
+ * últimas de la fila se rendían con un 500 en vez de recibir el 409 de
+ * "horario ocupado". Se les da margen para esperar su turno.
+ */
+const CALENDAR_TX = { maxWait: 10_000, timeout: 15_000 };
+
 const bookingInclude = {
   service: {
     select: {
@@ -218,7 +228,7 @@ export async function createBooking(input, { userId = null, ip = null } = {}) {
       },
       include: bookingInclude,
     });
-  });
+  }, CALENDAR_TX);
 
   // Los correos van fuera de la transacción y sin bloquear la respuesta.
   const ownerTo = settings.ownerNotificationEmail || settings.contactEmail;
@@ -410,7 +420,7 @@ export async function rescheduleBooking({ id, startAt }) {
     });
 
     return { updated: result, previousStart: booking.startAt };
-  });
+  }, CALENDAR_TX);
 
   sendMailAsync({
     to: updated.customerEmail,

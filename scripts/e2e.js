@@ -19,6 +19,7 @@
  */
 import { createApp } from '../src/app.js';
 import prisma from '../src/lib/prisma.js';
+import { DateTime } from 'luxon';
 
 const app = createApp();
 const server = await new Promise((resolve) => {
@@ -601,6 +602,69 @@ console.log('\n9. Tema del sitio (solo lo cambia la administradora)');
   await admin.request('/settings/admin', { method: 'PATCH', body: { theme: original } });
   const restaurado = await guest.request('/settings');
   check('Se restaura el tema original', restaurado.data.settings.theme === original);
+}
+
+// ── 9b. Tema de temporada programado ────────────────────────────────
+console.log('\n9b. Tema de temporada programado por fechas');
+{
+  const antes = (await admin.request('/settings/admin')).data.settings;
+  const guardado = {
+    theme: antes.theme,
+    seasonalTheme: antes.seasonalTheme,
+    seasonalStartDate: antes.seasonalStartDate,
+    seasonalEndDate: antes.seasonalEndDate,
+  };
+  const zona = antes.timezone;
+  const dia = (delta) => DateTime.now().setZone(zona).plus({ days: delta }).toISODate();
+
+  const sinFechas = await admin.request('/settings/admin', {
+    method: 'PATCH',
+    body: { seasonalTheme: 'HALLOWEEN', seasonalStartDate: '', seasonalEndDate: '' },
+  });
+  check('Programar sin fechas se rechaza con 400', sinFechas.status === 400, `recibido ${sinFechas.status}`);
+
+  const alReves = await admin.request('/settings/admin', {
+    method: 'PATCH',
+    body: { seasonalTheme: 'HALLOWEEN', seasonalStartDate: dia(5), seasonalEndDate: dia(1) },
+  });
+  check('Una fecha de fin anterior a la de inicio se rechaza', alReves.status === 400, `recibido ${alReves.status}`);
+
+  const fechaRara = await admin.request('/settings/admin', {
+    method: 'PATCH',
+    body: { seasonalTheme: 'HALLOWEEN', seasonalStartDate: '2026-02-30', seasonalEndDate: dia(1) },
+  });
+  check('Una fecha imposible se rechaza', fechaRara.status === 400, `recibido ${fechaRara.status}`);
+
+  const futuro = await admin.request('/settings/admin', {
+    method: 'PATCH',
+    body: { theme: 'LIGHT', seasonalTheme: 'HALLOWEEN', seasonalStartDate: dia(3), seasonalEndDate: dia(10) },
+  });
+  check(
+    'Una temporada futura queda programada pero no activa',
+    futuro.status === 200 && futuro.data.settings.seasonalUpcoming === true && futuro.data.settings.effectiveTheme === 'LIGHT',
+  );
+  check('La web sigue con el tema base antes de la temporada', (await guest.request('/settings')).data.settings.theme === 'LIGHT');
+
+  const hoy = await admin.request('/settings/admin', {
+    method: 'PATCH',
+    body: { seasonalStartDate: dia(-1), seasonalEndDate: dia(0) },
+  });
+  check('Si hoy cae dentro de las fechas, la temporada está activa', hoy.data.settings.seasonalActive === true);
+  check('Durante la temporada la web recibe el tema de temporada', (await guest.request('/settings')).data.settings.theme === 'HALLOWEEN');
+
+  const pasada = await admin.request('/settings/admin', {
+    method: 'PATCH',
+    body: { seasonalStartDate: dia(-5), seasonalEndDate: dia(-1) },
+  });
+  check('Terminada la temporada vuelve sola al tema base', pasada.data.settings.effectiveTheme === 'LIGHT');
+
+  const publicoSinFechas = (await guest.request('/settings')).data.settings;
+  check(
+    'La web pública no ve las fechas de la programación',
+    publicoSinFechas.seasonalStartDate === undefined && publicoSinFechas.seasonalTheme === undefined,
+  );
+
+  await admin.request('/settings/admin', { method: 'PATCH', body: guardado });
 }
 
 // ── 10. Promociones ─────────────────────────────────────────────────

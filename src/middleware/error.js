@@ -34,6 +34,14 @@ export function errorHandler(err, req, res, _next) {
     if (err.code === 'P2003') {
       return res.status(409).json({ error: 'No se puede completar: hay datos relacionados.' });
     }
+    // La base no pudo atender la transacción a tiempo (mucha demanda a
+    // la vez): es temporal, así que se pide reintentar en vez de un 500.
+    if (err.code === 'P2028') {
+      return res.status(503).json({
+        error: 'Hay muchas reservas en este momento. Inténtalo de nuevo en unos segundos.',
+        code: 'BUSY',
+      });
+    }
   }
 
   // La restricción de exclusión de Postgres contra el solapamiento de

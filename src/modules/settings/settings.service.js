@@ -1,4 +1,5 @@
 import prisma from '../../lib/prisma.js';
+import { nowIn } from '../../lib/time.js';
 
 /**
  * Ajustes del negocio: fila única con id = 1.
@@ -46,6 +47,41 @@ export async function updateSettings(data) {
 }
 
 /**
+ * Tema que debe ver hoy la web pública.
+ *
+ * Si hay un tema de temporada programado y hoy (en la zona horaria del
+ * negocio) cae entre su fecha de inicio y la de fin, ambas inclusive,
+ * manda ese; si no, el tema base. Las fechas son YYYY-MM-DD, así que se
+ * comparan como texto sin ambigüedad.
+ *
+ * Se calcula en cada petición (no se guarda), de modo que el cambio
+ * ocurre solo a medianoche del día de inicio y se deshace solo al
+ * terminar el día de fin, sin tareas programadas.
+ */
+export function seasonalStatus(settings, now = nowIn(settings.timezone)) {
+  const { seasonalTheme, seasonalStartDate: start, seasonalEndDate: end } = settings;
+  if (!seasonalTheme || !start || !end) return { active: false, upcoming: false };
+
+  const today = now.toISODate();
+  return { active: start <= today && today <= end, upcoming: today < start };
+}
+
+export function effectiveTheme(settings, now) {
+  return seasonalStatus(settings, now).active ? settings.seasonalTheme : settings.theme;
+}
+
+/** Ajustes completos para el panel, con el tema vigente ya resuelto. */
+export function adminSettings(settings) {
+  const status = seasonalStatus(settings);
+  return {
+    ...settings,
+    effectiveTheme: effectiveTheme(settings),
+    seasonalActive: status.active,
+    seasonalUpcoming: status.upcoming,
+  };
+}
+
+/**
  * Subconjunto público de los ajustes.
  *
  * El endpoint público NO expone `ownerNotificationEmail` ni nada
@@ -66,7 +102,8 @@ export function publicSettings(settings) {
     mapUrl: settings.mapUrl,
     businessHoursNote: settings.businessHoursNote,
     transferInstructions: settings.transferInstructions,
-    theme: settings.theme,
+    // La web pública recibe el tema ya resuelto: no sabe nada de fechas.
+    theme: effectiveTheme(settings),
     timezone: settings.timezone,
     stampsRequired: settings.stampsRequired,
     rewardDescription: settings.rewardDescription,

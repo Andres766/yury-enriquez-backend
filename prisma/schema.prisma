@@ -319,6 +319,12 @@ model Settings {
   ownerNotificationEmail String   @default("")
   transferInstructions   String   @default("")
   theme                  SiteTheme @default(LIGHT)
+  /// Tema de temporada programado. Entre seasonalStartDate y
+  /// seasonalEndDate (YYYY-MM-DD, ambos inclusive, en `timezone`) la web
+  /// pública muestra este tema en vez de `theme`.
+  seasonalTheme          SiteTheme?
+  seasonalStartDate      String?
+  seasonalEndDate        String?
   timezone               String   @default("America/Bogota")
   slotIntervalMinutes    Int      @default(30)
   bufferMinutes          Int      @default(15)
