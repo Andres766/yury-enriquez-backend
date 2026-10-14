@@ -5,10 +5,11 @@ import { requireAdmin } from '../../middleware/auth.js';
 import { requireCsrf } from '../../middleware/csrf.js';
 import { asyncHandler } from '../../lib/errors.js';
 import { cleanText } from '../../lib/sanitize.js';
-import { slotsQuerySchema, monthQuerySchema } from '../bookings/bookings.schema.js';
+import { slotsQuerySchema, monthQuerySchema, nextQuerySchema } from '../bookings/bookings.schema.js';
 import {
   getSlotsForDate,
   getMonthAvailability,
+  getNextAvailable,
   getAvailabilityRules,
   replaceAvailabilityRules,
   listTimeBlocks,
@@ -35,6 +36,19 @@ router.get(
   validate({ query: monthQuerySchema }),
   asyncHandler(async (req, res) => {
     res.json(await getMonthAvailability(req.valid.query));
+  }),
+);
+
+/**
+ * GET /api/availability/next?serviceId=…[&after=2026-10-24]
+ * Primer horario libre: el botón "Próximo horario libre" del asistente y
+ * "Ver el siguiente día con cupo" cuando un día está lleno.
+ */
+router.get(
+  '/next',
+  validate({ query: nextQuerySchema }),
+  asyncHandler(async (req, res) => {
+    res.json(await getNextAvailable(req.valid.query));
   }),
 );
 

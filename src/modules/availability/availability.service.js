@@ -20,6 +20,23 @@ import { badRequest, notFound } from '../../lib/errors.js';
 
 const LIVE_STATUSES = ['PENDING', 'CONFIRMED', 'COMPLETED'];
 
+/** Días de anticipación máxima para un servicio: el suyo o el general. */
+export function horizonDays(service, settings) {
+  return service?.maxAdvanceDays ?? settings.maxAdvanceDays;
+}
+
+/**
+ * Último instante reservable para un servicio.
+ *
+ * Se cuenta hasta el FINAL del último día, igual en el calendario, en
+ * la lista de horarios y al crear la reserva: si una fuera hasta "ahora
+ * + N días" exactos y otra hasta medianoche, el calendario ofrecería
+ * por la tarde horarios que luego se rechazan.
+ */
+export function bookingHorizon({ service, settings, now }) {
+  return now.plus({ days: horizonDays(service, settings) }).endOf('day');
+}
+
 export async function getAvailabilityRules() {
   return prisma.availabilityRule.findMany({
     orderBy: [{ weekday: 'asc' }, { startTime: 'asc' }],
@@ -38,7 +55,7 @@ export async function getSlotsForDate({ serviceId, date: dateISO }) {
 
   const service = await prisma.service.findFirst({
     where: { id: serviceId, active: true },
-    select: { id: true, durationMinutes: true, name: true },
+    select: { id: true, durationMinutes: true, name: true, maxAdvanceDays: true },
   });
   if (!service) throw notFound('El servicio no existe o no está disponible');
 
@@ -46,7 +63,7 @@ export async function getSlotsForDate({ serviceId, date: dateISO }) {
   const now = DateTime.now().setZone(tz);
 
   // Ventana de reserva: ni pasado ni más allá del horizonte permitido.
-  const horizon = now.plus({ days: settings.maxAdvanceDays }).endOf('day');
+  const horizon = bookingHorizon({ service, settings, now });
   if (day.endOf('day') < now.startOf('day') || day > horizon) {
     return { date: dateISO, timezone: tz, slots: [] };
   }
@@ -135,7 +152,7 @@ export async function getMonthAvailability({ serviceId, year, month }) {
 
   const service = await prisma.service.findFirst({
     where: { id: serviceId, active: true },
-    select: { id: true, durationMinutes: true },
+    select: { id: true, durationMinutes: true, maxAdvanceDays: true },
   });
   if (!service) throw notFound('El servicio no existe o no está disponible');
 
@@ -145,7 +162,7 @@ export async function getMonthAvailability({ serviceId, year, month }) {
 
   const now = DateTime.now().setZone(tz);
   const earliest = now.plus({ hours: settings.minNoticeHours });
-  const horizon = now.plus({ days: settings.maxAdvanceDays }).endOf('day');
+  const horizon = bookingHorizon({ service, settings, now });
 
   const [rules, bookings, blocks] = await Promise.all([
     prisma.availabilityRule.findMany({ where: { active: true } }),
@@ -185,8 +202,23 @@ export async function getMonthAvailability({ serviceId, year, month }) {
     const dateISO = day.toISODate();
     const dayRules = rulesByWeekday.get(day.weekday) ?? [];
 
-    if (dayRules.length === 0 || day > horizon || day.endOf('day') < earliest) {
-      days.push({ date: dateISO, available: false, slotCount: 0 });
+    /*
+     * Un día sin cupo puede estarlo por motivos muy distintos, y para la
+     * clienta no es lo mismo: "cerrado" (no se atiende ese día),
+     * "lleno" (Yury está ocupada) o "aún no abierto" (pasa del horizonte
+     * de reservas: se puede pedir por WhatsApp). Si todo saliera igual de
+     * gris, una novia que busca junio entendería que no hay cupo.
+     */
+    if (day.endOf('day') < earliest) {
+      days.push({ date: dateISO, available: false, slotCount: 0, reason: 'past' });
+      continue;
+    }
+    if (day > horizon) {
+      days.push({ date: dateISO, available: false, slotCount: 0, reason: 'beyond' });
+      continue;
+    }
+    if (dayRules.length === 0) {
+      days.push({ date: dateISO, available: false, slotCount: 0, reason: 'closed' });
       continue;
     }
 
@@ -204,10 +236,58 @@ export async function getMonthAvailability({ serviceId, year, month }) {
       }
     }
 
-    days.push({ date: dateISO, available: count > 0, slotCount: count });
+    days.push({ date: dateISO, available: count > 0, slotCount: count, ...(count > 0 ? {} : { reason: 'full' }) });
   }
 
-  return { year, month, timezone: tz, days };
+  return {
+    year,
+    month,
+    timezone: tz,
+    // El calendario usa estos dos datos para no dejar avanzar más allá
+    // del último mes reservable y explicar por qué.
+    maxAdvanceDays: horizonDays(service, settings),
+    lastBookableDate: horizon.toISODate(),
+    days,
+  };
+}
+
+/**
+ * Primer horario libre de un servicio, desde hoy (o desde el día
+ * siguiente a `after`) hasta el horizonte de reservas.
+ *
+ * Recorre mes a mes con el mismo cálculo del calendario y, al dar con
+ * el primer día con cupo, pide sus horarios: así el resultado es
+ * exactamente lo que la clienta vería al tocar ese día. Se corta a los
+ * 13 meses como red de seguridad (el horizonte máximo es de 365 días).
+ */
+export async function getNextAvailable({ serviceId, after }) {
+  const settings = await getSettings();
+  const tz = settings.timezone;
+  const now = DateTime.now().setZone(tz);
+
+  if (after && !isValidDateISO(after)) throw badRequest('Fecha inválida');
+  // Un `after` del pasado no puede hacer recorrer meses ya cerrados: se
+  // busca desde hoy como mínimo.
+  const afterISO = after ? DateTime.fromISO(after, { zone: tz }).plus({ days: 1 }).toISODate() : null;
+  const todayISO = now.toISODate();
+  const fromISO = afterISO && afterISO > todayISO ? afterISO : todayISO;
+
+  let cursor = DateTime.fromISO(fromISO, { zone: tz }).startOf('month');
+  for (let i = 0; i < 13; i += 1) {
+    const month = await getMonthAvailability({ serviceId, year: cursor.year, month: cursor.month });
+    // Normalmente el primer día con cupo ya tiene horarios, pero si no
+    // (p. ej. el de hoy al cruzar la antelación mínima) se sigue con el
+    // siguiente del mismo mes en vez de saltar al mes que viene.
+    for (const day of month.days.filter((d) => d.available && d.date >= fromISO)) {
+      const { slots } = await getSlotsForDate({ serviceId, date: day.date });
+      if (slots.length > 0) return { date: day.date, slot: slots[0], lastBookableDate: month.lastBookableDate };
+    }
+    if (cursor.endOf('month').toISODate() >= month.lastBookableDate) {
+      return { date: null, slot: null, lastBookableDate: month.lastBookableDate };
+    }
+    cursor = cursor.plus({ months: 1 });
+  }
+  return { date: null, slot: null, lastBookableDate: null };
 }
 
 // ── Administración de reglas y bloqueos ─────────────────────────────

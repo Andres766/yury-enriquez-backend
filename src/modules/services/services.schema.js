@@ -13,12 +13,20 @@ const text = (max, msg) =>
  * error de copiar y pegar) podría introducir `javascript:` y convertir
  * la galería en un vector de XSS.
  */
+/**
+ * Ruta del propio sitio ("/img/…"). "//otro.com/x.jpg" y "/\otro.com"
+ * también empiezan por "/", pero el navegador los trata como enlaces a
+ * otro dominio: se rechazan para que "relativa" signifique de verdad
+ * "de esta web".
+ */
+export const isSitePath = (v) => v.startsWith('/') && !/^\/[/\\]/.test(v);
+
 const imageUrl = z
   .string()
   .trim()
   .max(500)
   .refine(
-    (v) => /^https?:\/\//i.test(v) || v.startsWith('/'),
+    (v) => /^https?:\/\//i.test(v) || isSitePath(v),
     'La URL debe empezar por http://, https:// o /',
   );
 
@@ -28,6 +36,20 @@ const imageSchema = z.object({
 });
 
 const cuid = z.string().min(20).max(40).regex(/^[a-z0-9]+$/i);
+
+/**
+ * Viñetas de "Qué incluye". Se limpian una a una y las vacías o
+ * repetidas se descartan en vez de rechazar el formulario entero: en el
+ * panel es normal que quede una fila en blanco al final. Una viñeta es
+ * una línea, así que los saltos de línea se vuelven espacios.
+ */
+const includesList = z
+  .array(z.string().max(400, 'Cada viñeta debe ser una frase corta'))
+  .max(30)
+  .transform((items) => [
+    ...new Set(items.map((v) => cleanText(v, { maxLength: 140 }).replace(/\s*\n+\s*/g, ' ')).filter(Boolean)),
+  ])
+  .pipe(z.array(z.string()).max(12, 'Máximo 12 viñetas'));
 
 const baseService = {
   name: text(120, 'El nombre es obligatorio'),
@@ -42,6 +64,20 @@ const baseService = {
   sortOrder: z.coerce.number().int().min(0).max(999).default(0),
   images: z.array(imageSchema).max(12, 'Máximo 12 imágenes').default([]),
   occasionIds: z.array(cuid).max(12).default([]),
+  // FIXED "$85.000" · FROM "Desde $85.000" · QUOTE "Precio a cotizar".
+  priceMode: z
+    .enum(['FIXED', 'FROM', 'QUOTE'], { errorMap: () => ({ message: 'Elige cómo se muestra el precio' }) })
+    .default('FIXED'),
+  includes: includesList.default([]),
+  // null = usa el límite general de Ajustes. Hasta dos años, porque las
+  // bodas se separan con mucha anticipación.
+  maxAdvanceDays: z
+    .number({ invalid_type_error: 'Escribe un número de días' })
+    .int('Escribe un número entero de días')
+    .min(1, 'Mínimo 1 día')
+    .max(730, 'Máximo 730 días (dos años)')
+    .nullable()
+    .default(null),
 };
 
 export const createServiceSchema = z.object(baseService);

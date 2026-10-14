@@ -27,6 +27,16 @@ enum ServiceCategory {
   PAQUETE
 }
 
+/// Cómo se muestra el precio de un servicio.
+///   FIXED — precio cerrado ("$120.000")
+///   FROM  — precio de partida ("Desde $120.000"): varía según el caso
+///   QUOTE — sin precio público: se cotiza por WhatsApp
+enum PriceMode {
+  FIXED
+  FROM
+  QUOTE
+}
+
 enum BookingStatus {
   PENDING // creada por el cliente, a la espera de confirmación
   CONFIRMED // confirmada por la maquilladora
@@ -115,6 +125,12 @@ model Service {
   active           Boolean         @default(true)
   featured         Boolean         @default(false)
   sortOrder        Int             @default(0)
+  priceMode        PriceMode       @default(FIXED)
+  /// Viñetas de "Qué incluye" (en orden).
+  includes         String[]        @default([])
+  /// Si se fija, reemplaza a Settings.maxAdvanceDays para este servicio:
+  /// las novias reservan con muchos meses de anticipación.
+  maxAdvanceDays   Int?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
@@ -235,6 +251,8 @@ model Booking {
   priceCents    Int
   currency      String        @default("COP")
   createdIp     String?
+  /// De dónde llegó la clienta (utm_source / ref del enlace), si se sabe.
+  source        String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   confirmedAt   DateTime?
@@ -333,4 +351,25 @@ model Settings {
   stampsRequired         Int      @default(8)
   rewardDescription      String   @default("Maquillaje social de cortesía")
   updatedAt              DateTime @updatedAt
+}
+
+// ── Testimonios ─────────────────────────────────────────────────────
+
+/// Opiniones de clientas que la administradora publica a mano. No se
+/// recogen solas desde la web: así no hay spam ni reseñas inventadas.
+model Testimonial {
+  id            String   @id @default(cuid())
+  name          String
+  /// "Novia · marzo 2026", "Quinceañera", etc. Libre.
+  occasionLabel String   @default("")
+  quote         String
+  /// 1 a 5, opcional.
+  rating        Int?
+  photoUrl      String?
+  published     Boolean  @default(false)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([published, sortOrder])
 }

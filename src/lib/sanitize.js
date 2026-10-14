@@ -41,6 +41,47 @@ export function cleanPhone(value) {
   return plus + raw.replace(/\D/g, '');
 }
 
+/**
+ * Como `cleanPhone`, pero además deja los celulares colombianos en forma
+ * canónica `+57XXXXXXXXXX`.
+ *
+ * En Colombia casi todo el mundo escribe su celular de 10 dígitos sin
+ * indicativo ("300 123 4567"). Guardado así, el enlace wa.me con el que
+ * la maquilladora confirma la cita lo lee como un número de Grecia (+30)
+ * y no abre. Un número de 10 dígitos que empieza por 3 solo puede ser un
+ * móvil colombiano, así que se le pone el +57. También se aceptan
+ * "57300…" sin el más y "0057300…". Cualquier otra cosa (un número de
+ * Ecuador con +593, un fijo) se deja tal cual: no se inventa nada.
+ */
+export function cleanCoPhone(value) {
+  const clean = cleanPhone(value);
+  let digits = clean.replace(/\D/g, '');
+  if (!clean.startsWith('+') && digits.startsWith('00')) digits = digits.slice(2);
+
+  if (digits.length === 10 && digits.startsWith('3')) return `+57${digits}`;
+  if (digits.length === 12 && digits.startsWith('573')) return `+${digits}`;
+  return clean.startsWith('00') ? `+${digits}` : clean;
+}
+
+/**
+ * Etiqueta corta de origen ("instagram", "instagram/catrinas2026").
+ *
+ * Llega de parámetros de la URL que cualquiera puede escribir, así que
+ * se reduce a minúsculas, letras, números y . _ - / y se recorta. Si no
+ * queda nada útil se devuelve cadena vacía: un origen raro nunca debe
+ * hacer fallar una reserva.
+ */
+export function cleanSource(value, { maxLength = 60 } = {}) {
+  return cleanText(value, { maxLength: 200 })
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9._\-/]/g, '')
+    .slice(0, maxLength)
+    .replace(/^[-/.]+|[-/.]+$/g, '');
+}
+
 const HTML_ENTITIES = {
   '&': '&amp;',
   '<': '&lt;',

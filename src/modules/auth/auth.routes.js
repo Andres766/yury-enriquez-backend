@@ -10,6 +10,7 @@ import {
   loginSchema,
   updateProfileSchema,
   changePasswordSchema,
+  changeEmailSchema,
 } from './auth.schema.js';
 import {
   register,
@@ -20,6 +21,7 @@ import {
   getProfile,
   updateProfile,
   changePassword,
+  changeEmail,
 } from './auth.service.js';
 
 const router = Router();
@@ -149,6 +151,27 @@ router.post(
     await changePassword(req.user.id, req.valid.body);
     clearSessionCookies(res);
     res.json({ ok: true, message: 'Contraseña actualizada. Vuelve a iniciar sesión.' });
+  }),
+);
+
+/**
+ * POST /api/auth/change-email — cambia el correo de inicio de sesión.
+ *
+ * Mismo blindaje que el cambio de contraseña (sesión, CSRF, contraseña
+ * actual y límite de intentos fallidos). La sesión de este navegador se
+ * conserva; las de otros equipos se cierran.
+ */
+router.post(
+  '/change-email',
+  requireAuth,
+  requireCsrf,
+  loginLimiter,
+  validate({ body: changeEmailSchema }),
+  asyncHandler(async (req, res) => {
+    const { user, accessToken } = await changeEmail(req.user.id, req.valid.body, {
+      keepRefreshToken: req.cookies?.[REFRESH_COOKIE],
+    });
+    res.json({ user, accessToken, message: 'Correo actualizado. Desde ahora inicias sesión con él.' });
   }),
 );
 

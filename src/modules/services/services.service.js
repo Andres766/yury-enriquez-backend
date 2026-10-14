@@ -1,9 +1,22 @@
 import prisma from '../../lib/prisma.js';
 import { notFound, conflict } from '../../lib/errors.js';
 
+const occasionLink = { occasion: { select: { id: true, slug: true, name: true } } };
+
 const serviceInclude = {
   images: { orderBy: { sortOrder: 'asc' } },
-  occasions: { include: { occasion: { select: { id: true, slug: true, name: true } } } },
+  occasions: { include: occasionLink, orderBy: { occasion: { sortOrder: 'asc' } } },
+};
+
+/*
+ * En la web pública solo se listan las ocasiones visibles: si Yury
+ * oculta una, el chip "Ideal para" no debe llevar a una página que ya no
+ * existe. El panel usa `serviceInclude` completo, porque al guardar se
+ * reescriben los enlaces y perder los de una ocasión oculta los borraría.
+ */
+const publicInclude = {
+  ...serviceInclude,
+  occasions: { ...serviceInclude.occasions, where: { occasion: { active: true } } },
 };
 
 const shape = (service) => ({
@@ -19,7 +32,7 @@ export async function listServices({ category, occasion, includeInactive = false
 
   const services = await prisma.service.findMany({
     where,
-    include: serviceInclude,
+    include: includeInactive ? serviceInclude : publicInclude,
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   });
 
@@ -29,7 +42,7 @@ export async function listServices({ category, occasion, includeInactive = false
 export async function getServiceBySlug(slug) {
   const service = await prisma.service.findFirst({
     where: { slug, active: true },
-    include: serviceInclude,
+    include: publicInclude,
   });
   if (!service) throw notFound('Servicio no encontrado');
   return shape(service);

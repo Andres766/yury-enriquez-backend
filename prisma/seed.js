@@ -1,15 +1,16 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
+import { servicePhotos, occasionPhoto } from './fotos-reales.js';
 
 /**
  * Datos de prueba.
  *
  * Idempotente: se puede ejecutar varias veces sin duplicar nada.
  *
- * Las fotos apuntan a picsum.photos con semillas fijas, así la galería
- * no sale vacía al montar el proyecto. Sustitúyelas por las fotos reales
- * del estudio desde el panel (Servicios → editar → galería).
+ * Las fotos de servicios y ocasiones son las reales de Yury (ver
+ * prisma/fotos-reales.js). Las de picsum que quedan abajo solo se usan
+ * si algún servicio u ocasión no tiene foto real asignada.
  */
 
 const prisma = new PrismaClient();
@@ -381,10 +382,11 @@ async function main() {
   // 3. Ocasiones
   const occasionBySlug = {};
   for (const occasion of OCCASIONS) {
+    const data = { ...occasion, heroImage: occasionPhoto(occasion.slug) ?? occasion.heroImage };
     occasionBySlug[occasion.slug] = await prisma.occasion.upsert({
       where: { slug: occasion.slug },
-      update: occasion,
-      create: occasion,
+      update: data,
+      create: data,
     });
   }
   console.log(`  ✔ Ocasiones (${OCCASIONS.length})`);
@@ -392,7 +394,7 @@ async function main() {
   // 4. Servicios
   const serviceByName = {};
   for (const svc of SERVICES) {
-    const { occasions, images, ...fields } = svc;
+    const { occasions, images: placeholderImages, ...fields } = svc;
     const slug = fields.name
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, "")
@@ -400,6 +402,7 @@ async function main() {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .slice(0, 60);
+    const images = servicePhotos(slug)?.map(({ url, alt }) => ({ url, alt })) ?? placeholderImages;
 
     const existing = await prisma.service.findUnique({ where: { slug } });
     if (existing) {

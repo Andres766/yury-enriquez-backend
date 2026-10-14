@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { cleanText, cleanEmail, cleanPhone } from '../../lib/sanitize.js';
+import { cleanText, cleanEmail, cleanCoPhone, cleanSource } from '../../lib/sanitize.js';
 
 /**
  * Esquemas de reservas.
@@ -26,9 +26,11 @@ const email = z
   .transform(cleanEmail)
   .pipe(z.string().email('Correo electrónico inválido').max(254));
 
+// Se guarda en forma canónica (+57…) para que el enlace de WhatsApp del
+// panel y del correo funcione aunque la clienta no escriba el indicativo.
 const phone = z
   .string()
-  .transform(cleanPhone)
+  .transform(cleanCoPhone)
   .pipe(
     z
       .string()
@@ -59,6 +61,16 @@ export const createBookingSchema = z.object({
   }),
   notes: notes,
   /**
+   * De dónde llegó la clienta (utm_source / ref del enlace). Es solo un
+   * dato para Yury: se limpia y se recorta en vez de rechazarse, porque
+   * un parámetro raro en la URL no puede costar una reserva.
+   */
+  source: z
+    .string()
+    .transform((v) => cleanSource(v) || undefined)
+    .optional()
+    .nullable(),
+  /**
    * Campo trampa para bots: los navegadores reales lo dejan vacío
    * porque está oculto con CSS. Si llega con contenido, se rechaza.
    */
@@ -82,6 +94,15 @@ export const monthQuerySchema = z.object({
   serviceId: cuid,
   year: z.coerce.number().int().min(2024).max(2100),
   month: z.coerce.number().int().min(1).max(12),
+});
+
+export const nextQuerySchema = z.object({
+  serviceId: cuid,
+  /** Buscar a partir del día siguiente a esta fecha (opcional). */
+  after: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Usa el formato AAAA-MM-DD')
+    .optional(),
 });
 
 export const idParamSchema = z.object({ id: cuid });

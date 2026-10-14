@@ -67,3 +67,8 @@ export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'Escribe tu contraseña actual').max(200),
   newPassword: password,
 });
+
+export const changeEmailSchema = z.object({
+  currentPassword: z.string().min(1, 'Escribe tu contraseña actual').max(200),
+  newEmail: email,
+});

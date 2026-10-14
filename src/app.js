@@ -18,6 +18,7 @@ import bookingsRoutes from './modules/bookings/bookings.routes.js';
 import loyaltyRoutes from './modules/loyalty/loyalty.routes.js';
 import promotionsRoutes from './modules/promotions/promotions.routes.js';
 import settingsRoutes from './modules/settings/settings.routes.js';
+import testimonialsRoutes from './modules/testimonials/testimonials.routes.js';
 
 export function createApp() {
   const app = express();
@@ -94,6 +95,7 @@ export function createApp() {
   app.use('/api/loyalty', loyaltyRoutes);
   app.use('/api/promotions', promotionsRoutes);
   app.use('/api/settings', settingsRoutes);
+  app.use('/api/testimonials', testimonialsRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

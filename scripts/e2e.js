@@ -684,6 +684,130 @@ console.log('\n10. Promociones');
   );
 }
 
+// ── 11. Celular, origen y horizonte por servicio ────────────────────
+console.log('\n11. Celular sin indicativo, origen de la reserva y horizonte por servicio');
+{
+  /*
+   * Se usa un día distinto al de las secciones anteriores, que ya dejaron
+   * ocupados varios horarios de `slotDate`.
+   */
+  const now = DateTime.now();
+  const meses = [now, now.plus({ months: 1 })];
+  let dias = [];
+  for (const m of meses) {
+    const res = await guest.request(`/availability/month?serviceId=${service.id}&year=${m.year}&month=${m.month}`);
+    dias = dias.concat((res.data.days ?? []).filter((d) => d.available && d.date !== slotDate));
+  }
+  dias.sort((a, b) => b.slotCount - a.slotCount);
+  const dia = dias[0]?.date;
+  const libres = dia
+    ? (await guest.request(`/availability/slots?serviceId=${service.id}&date=${dia}`)).data.slots ?? []
+    : [];
+  check('Hay un segundo día con horarios para esta sección', libres.length >= 3, `día ${dia}, ${libres.length} huecos`);
+
+  const reservar = (extra) =>
+    guest.request('/bookings', {
+      method: 'POST',
+      body: {
+        serviceId: service.id,
+        customerName: 'Prueba Origen',
+        customerEmail: 'prueba.origen@ejemplo.test',
+        paymentMethod: 'EFECTIVO',
+        ...extra,
+      },
+    });
+
+  // Celular de 10 dígitos sin +57, como lo escribe casi todo el mundo.
+  const sinIndicativo = await reservar({
+    startAt: libres[0]?.start,
+    customerPhone: '300 555 1234',
+    source: 'Instagram/Catrinas2026',
+  });
+  if (sinIndicativo.data.booking) created.bookingCodes.push(sinIndicativo.data.booking.code);
+  check('Se reserva con el celular escrito sin indicativo', sinIndicativo.status === 201,
+    `recibido ${sinIndicativo.status}: ${sinIndicativo.data?.error ?? ''}`);
+
+  const guardada = sinIndicativo.data.booking
+    ? await prisma.booking.findUnique({ where: { code: sinIndicativo.data.booking.code } })
+    : null;
+  check('El celular se guarda en forma canónica +57', guardada?.customerPhone === '+573005551234',
+    `guardado ${guardada?.customerPhone}`);
+  check('El origen de la reserva se guarda normalizado', guardada?.source === 'instagram/catrinas2026',
+    `guardado ${guardada?.source}`);
+
+  // Los huecos van cada 30 min y el servicio dura más: el segundo de la
+  // lista se solapa con el primero. Se pide de nuevo la lista.
+  const restantes = (await guest.request(`/availability/slots?serviceId=${service.id}&date=${dia}`)).data.slots ?? [];
+  const largo = await reservar({
+    startAt: restantes[0]?.start,
+    customerPhone: '+57 301 222 3344',
+    source: `ref-${'x'.repeat(300)}<script>`,
+  });
+  if (largo.data.booking) created.bookingCodes.push(largo.data.booking.code);
+  check('Un origen larguísimo no impide reservar', largo.status === 201, `recibido ${largo.status}: ${largo.data?.error ?? ''}`);
+  const guardadaLarga = largo.data.booking
+    ? await prisma.booking.findUnique({ where: { code: largo.data.booking.code } })
+    : null;
+  check(
+    'El origen se recorta a 60 caracteres y sin símbolos',
+    (guardadaLarga?.source?.length ?? 99) <= 60 && !/[<>]/.test(guardadaLarga?.source ?? '<'),
+    `guardado ${guardadaLarga?.source?.length} caracteres`,
+  );
+
+  // Horizonte por servicio: un paquete de novia que acepta 365 días.
+  const lejano = (await prisma.service.findMany({ where: { active: true, NOT: { id: service.id } }, take: 1 }))[0];
+  const original = lejano.maxAdvanceDays;
+  await prisma.service.update({ where: { id: lejano.id }, data: { maxAdvanceDays: 365 } });
+
+  let slotLejano = null;
+  let fechaLejana = null;
+  for (let delta = 200; delta < 214 && !slotLejano; delta += 1) {
+    fechaLejana = DateTime.now().setZone('America/Bogota').plus({ days: delta }).toISODate();
+    const res = await guest.request(`/availability/slots?serviceId=${lejano.id}&date=${fechaLejana}`);
+    slotLejano = res.data.slots?.[0] ?? null;
+  }
+  check('Con 365 días, el servicio ofrece horarios a 200 días', Boolean(slotLejano), `buscado desde +200 días`);
+
+  const [y, m] = fechaLejana.split('-').map(Number);
+  const mesLejano = await guest.request(`/availability/month?serviceId=${lejano.id}&year=${y}&month=${m}`);
+  check('El calendario informa el horizonte propio del servicio', mesLejano.data.maxAdvanceDays === 365,
+    `recibido ${mesLejano.data.maxAdvanceDays}`);
+
+  const otroServicio = await guest.request(`/availability/slots?serviceId=${service.id}&date=${fechaLejana}`);
+  check('Un servicio con el horizonte general (90) no ofrece ese día', otroServicio.data.slots?.length === 0);
+
+  const mesGeneral = await guest.request(`/availability/month?serviceId=${service.id}&year=${y}&month=${m}`);
+  check(
+    'En el calendario general esos días salen como "aún no abiertos", no como llenos',
+    (mesGeneral.data.days ?? []).filter((d) => d.date >= fechaLejana).every((d) => d.reason === 'beyond'),
+  );
+
+  if (slotLejano) {
+    await prisma.service.update({ where: { id: lejano.id }, data: { maxAdvanceDays: null } });
+    const rechazada = await reservar({ serviceId: lejano.id, startAt: slotLejano.start, customerPhone: '3015556677' });
+    if (rechazada.data.booking) created.bookingCodes.push(rechazada.data.booking.code);
+    check('Con el horizonte general, la reserva a 200 días se rechaza', rechazada.status === 400,
+      `recibido ${rechazada.status}`);
+
+    await prisma.service.update({ where: { id: lejano.id }, data: { maxAdvanceDays: 365 } });
+    const aceptada = await reservar({ serviceId: lejano.id, startAt: slotLejano.start, customerPhone: '3015556677' });
+    if (aceptada.data.booking) created.bookingCodes.push(aceptada.data.booking.code);
+    check('Con 365 días en el servicio, la misma reserva se acepta', aceptada.status === 201,
+      `recibido ${aceptada.status}: ${aceptada.data?.error ?? ''}`);
+  }
+
+  await prisma.service.update({ where: { id: lejano.id }, data: { maxAdvanceDays: original } });
+
+  const proximo = await guest.request(`/availability/next?serviceId=${service.id}`);
+  check(
+    'GET /availability/next devuelve el primer horario libre',
+    proximo.status === 200 && Boolean(proximo.data.slot?.start) && Boolean(proximo.data.date),
+    JSON.stringify(proximo.data).slice(0, 200),
+  );
+  const despues = await guest.request(`/availability/next?serviceId=${service.id}&after=${proximo.data.date}`);
+  check('Con ?after= busca a partir del día siguiente', despues.status === 200 && (despues.data.date ?? '9') > proximo.data.date);
+}
+
 // ── Limpieza ────────────────────────────────────────────────────────
 console.log('\nLimpiando datos de prueba…');
 try {

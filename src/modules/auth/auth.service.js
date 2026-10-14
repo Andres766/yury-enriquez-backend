@@ -8,6 +8,7 @@ import {
   rotateRefreshToken,
   revokeRefreshToken,
   revokeAllSessions,
+  sha256,
 } from '../../lib/tokens.js';
 import { conflict, unauthorized, badRequest, notFound } from '../../lib/errors.js';
 import { sendMailAsync } from '../../lib/mailer.js';
@@ -152,7 +153,7 @@ export async function changePassword(userId, { currentPassword, newPassword }) {
   if (!user) throw notFound('Usuario no encontrado');
 
   const ok = await verifyPassword(user.passwordHash, currentPassword);
-  if (!ok) throw badRequest('La contraseña actual no es correcta');
+  if (!ok) throw wrongCurrentPassword();
 
   await prisma.user.update({
     where: { id: userId },
@@ -161,6 +162,83 @@ export async function changePassword(userId, { currentPassword, newPassword }) {
 
   // Cambiar la contraseña cierra el resto de sesiones abiertas.
   await revokeAllSessions(userId);
+}
+
+/*
+ * El error lleva el campo para que el formulario lo marque bajo
+ * "Contraseña actual" en vez de dejar solo un aviso flotante.
+ */
+function wrongCurrentPassword() {
+  return badRequest('La contraseña actual no es correcta', {
+    code: 'WRONG_PASSWORD',
+    details: [{ field: 'currentPassword', message: 'La contraseña actual no es correcta' }],
+  });
+}
+
+/**
+ * Cambia el correo con el que se inicia sesión.
+ *
+ * Exige la contraseña actual: con una sesión abierta en un equipo
+ * ajeno no basta para quedarse con la cuenta. Las demás sesiones se
+ * cierran (todas menos la de esta petición), igual que al cambiar la
+ * contraseña, porque el correo es la otra mitad de las credenciales.
+ *
+ * A diferencia del registro, aquí NO se vinculan las reservas de
+ * invitada hechas con el correo nuevo: sin verificar el buzón, eso
+ * permitiría ver las citas de otra persona con solo escribir su correo.
+ */
+export async function changeEmail(userId, { currentPassword, newEmail }, { keepRefreshToken } = {}) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw notFound('Usuario no encontrado');
+
+  const ok = await verifyPassword(user.passwordHash, currentPassword);
+  if (!ok) throw wrongCurrentPassword();
+
+  if (newEmail === user.email) {
+    throw badRequest('Ese ya es tu correo actual', {
+      details: [{ field: 'newEmail', message: 'Ese ya es tu correo actual' }],
+    });
+  }
+
+  const taken = await prisma.user.findUnique({ where: { email: newEmail }, select: { id: true } });
+  if (taken) {
+    throw conflict('Ese correo ya está en uso en otra cuenta', {
+      details: [{ field: 'newEmail', message: 'Ese correo ya está en uso en otra cuenta' }],
+    });
+  }
+
+  let updated;
+  try {
+    updated = await prisma.user.update({
+      where: { id: userId },
+      data: { email: newEmail },
+      select: publicUserSelect,
+    });
+  } catch (error) {
+    // Dos cuentas pidiendo el mismo correo a la vez: gana la restricción
+    // única de la base y la otra recibe el mismo mensaje que arriba.
+    if (error?.code === 'P2002') throw conflict('Ese correo ya está en uso en otra cuenta');
+    throw error;
+  }
+
+  /*
+   * Las otras sesiones se BORRAN en vez de marcarse revocadas. Un token
+   * revocado que vuelve a presentarse dispara la detección de robo
+   * (rotateRefreshToken) y cerraría también la sesión de este
+   * navegador en cuanto el otro equipo intentara renovar. Borrado, el
+   * otro equipo solo recibe "sesión inválida".
+   */
+  await prisma.refreshToken.deleteMany({
+    where: {
+      userId,
+      revokedAt: null,
+      ...(keepRefreshToken ? { tokenHash: { not: sha256(keepRefreshToken) } } : {}),
+    },
+  });
+
+  // El access token lleva el correo dentro: se emite uno nuevo para que
+  // la sesión actual no siga circulando con el anterior.
+  return { user: updated, accessToken: signAccessToken(updated) };
 }
 
 export { publicUserSelect };

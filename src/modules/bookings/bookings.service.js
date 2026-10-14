@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma.js';
 import { getSettings } from '../settings/settings.service.js';
 import { DateTime, zonedDateTime, overlaps } from '../../lib/time.js';
+import { bookingHorizon, horizonDays } from '../availability/availability.service.js';
 import { badRequest, notFound, conflict, forbidden } from '../../lib/errors.js';
 import { generateBookingCode } from '../../lib/tokens.js';
 import { sendMailAsync } from '../../lib/mailer.js';
@@ -45,6 +46,9 @@ const bookingInclude = {
       priceCents: true,
       currency: true,
       category: true,
+      // Para que la web y el correo digan "Desde…" o "A cotizar" en
+      // vez de presentar como cerrado un precio que no lo es.
+      priceMode: true,
     },
   },
   occasion: { select: { id: true, slug: true, name: true } },
@@ -94,9 +98,13 @@ async function assertSlotBookable(tx, { service, startAt, settings, ignoreBookin
     );
   }
 
-  // 2. Dentro del horizonte de reservas.
-  if (start > now.plus({ days: settings.maxAdvanceDays })) {
-    throw badRequest(`Solo aceptamos reservas con ${settings.maxAdvanceDays} días de antelación como máximo.`);
+  // 2. Dentro del horizonte de reservas. Cada servicio puede tener el
+  // suyo (las novias separan fecha con muchos meses de anticipación);
+  // si no lo tiene, manda el general de Ajustes. Es la misma cuenta que
+  // hace el calendario (bookingHorizon), para que nunca ofrezca un día
+  // que aquí se rechace.
+  if (start > bookingHorizon({ service, settings, now })) {
+    throw badRequest(`Solo aceptamos reservas con ${horizonDays(service, settings)} días de antelación como máximo.`);
   }
 
   // 3. Dentro de una franja de atención, con el servicio completo dentro.
@@ -187,6 +195,7 @@ export async function createBooking(input, { userId = null, ip = null } = {}) {
         durationMinutes: true,
         priceCents: true,
         currency: true,
+        maxAdvanceDays: true,
       },
     });
     if (!service) throw notFound('El servicio seleccionado no está disponible');
@@ -225,6 +234,7 @@ export async function createBooking(input, { userId = null, ip = null } = {}) {
         paymentMethod: input.paymentMethod,
         status: 'PENDING',
         createdIp: ip,
+        source: input.source ?? null,
       },
       include: bookingInclude,
     });
@@ -398,7 +408,7 @@ export async function rescheduleBooking({ id, startAt }) {
 
     const booking = await tx.booking.findUnique({
       where: { id },
-      include: { service: { select: { durationMinutes: true } } },
+      include: { service: { select: { durationMinutes: true, maxAdvanceDays: true } } },
     });
     if (!booking) throw notFound('Reserva no encontrada');
     if (booking.status === 'CANCELLED') throw badRequest('No se puede reprogramar una reserva cancelada');

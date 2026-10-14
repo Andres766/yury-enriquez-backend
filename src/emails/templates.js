@@ -100,6 +100,18 @@ function button(href, label) {
  * `booking.endAt`: ese campo incluye el margen de limpieza entre citas,
  * que es información interna de la agenda y confundiría a la clienta.
  */
+/**
+ * El precio, igual que en la web: un servicio «desde» no tiene un total
+ * cerrado y uno «a cotizar» no tiene precio público.
+ */
+function priceRow(booking) {
+  const amount = money(booking.priceCents, booking.currency);
+  const mode = booking.service?.priceMode ?? 'FIXED';
+  if (mode === 'QUOTE') return ['Valor', 'A cotizar con Yury por WhatsApp'];
+  if (mode === 'FROM') return ['Valor', `Desde ${amount} (Yury te confirma el valor final)`];
+  return ['Valor', amount];
+}
+
 function bookingRows(booking, tz) {
   const serviceEnd = new Date(booking.startAt.getTime() + booking.service.durationMinutes * 60_000);
   return [
@@ -109,7 +121,7 @@ function bookingRows(booking, tz) {
     ['Ocasión', booking.occasion?.name ?? null],
     ['Fecha', formatLongDate(booking.startAt, tz)],
     ['Hora', `${formatTime(booking.startAt, tz)} – ${formatTime(serviceEnd, tz)}`],
-    ['Valor', money(booking.priceCents, booking.currency)],
+    priceRow(booking),
     ['Medio de pago', PAYMENT_LABEL[booking.paymentMethod] ?? booking.paymentMethod],
     ['Estado', STATUS_LABEL[booking.status] ?? booking.status],
   ];
