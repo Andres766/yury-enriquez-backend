@@ -86,6 +86,9 @@ const withServices = {
           sortOrder: true,
           // La página de bodas avisa hasta qué día llega la agenda en línea.
           maxAdvanceDays: true,
+          // Para mostrar «Solo del 22 al 31 de octubre» también aquí.
+          availableFrom: true,
+          availableUntil: true,
           durationMinutes: true,
           shortDescription: true,
           images: { take: 1, orderBy: { sortOrder: 'asc' } },

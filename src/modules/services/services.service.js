@@ -1,5 +1,5 @@
 import prisma from '../../lib/prisma.js';
-import { notFound, conflict } from '../../lib/errors.js';
+import { notFound, conflict, badRequest } from '../../lib/errors.js';
 
 const occasionLink = { occasion: { select: { id: true, slug: true, name: true } } };
 
@@ -77,8 +77,25 @@ async function uniqueSlug(base, excludeId = null) {
   }
 }
 
+/**
+ * La temporada se valida ya mezclada con lo guardado: el panel puede
+ * enviar solo la fecha de fin, y "hasta el 20" con un "desde el 22" ya
+ * guardado dejaría un servicio que no se puede reservar nunca. Mismo
+ * formato de error que el validador, para que el formulario lo pinte
+ * bajo el campo.
+ */
+function assertSeasonRange({ availableFrom, availableUntil }) {
+  if (availableFrom && availableUntil && availableUntil < availableFrom) {
+    throw badRequest('Revisa las fechas de temporada', {
+      code: 'VALIDATION_ERROR',
+      details: [{ field: 'availableUntil', message: 'La fecha de fin no puede ser anterior a la de inicio' }],
+    });
+  }
+}
+
 export async function createService(data) {
   const { images = [], occasionIds = [], ...fields } = data;
+  assertSeasonRange(fields);
   const slug = await uniqueSlug(fields.name);
 
   const service = await prisma.service.create({
@@ -97,8 +114,15 @@ export async function createService(data) {
 export async function updateService(id, data) {
   const { images, occasionIds, ...fields } = data;
 
-  const existing = await prisma.service.findUnique({ where: { id }, select: { id: true, name: true } });
+  const existing = await prisma.service.findUnique({
+    where: { id },
+    select: { id: true, name: true, availableFrom: true, availableUntil: true },
+  });
   if (!existing) throw notFound('Servicio no encontrado');
+  assertSeasonRange({
+    availableFrom: fields.availableFrom !== undefined ? fields.availableFrom : existing.availableFrom,
+    availableUntil: fields.availableUntil !== undefined ? fields.availableUntil : existing.availableUntil,
+  });
 
   const slug = fields.name && fields.name !== existing.name ? await uniqueSlug(fields.name, id) : undefined;
 

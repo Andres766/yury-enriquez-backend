@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { cleanText, cleanEmail, cleanCoPhone, cleanSource } from '../../lib/sanitize.js';
+import { cleanText, cleanLine, cleanEmail, cleanCoPhone, cleanSource } from '../../lib/sanitize.js';
 
 /**
  * Esquemas de reservas.
@@ -46,6 +46,29 @@ const notes = z
   .optional()
   .or(z.literal(''));
 
+/**
+ * Dónde se hace el servicio. Yury trabaja 100 % a domicilio, así que sin
+ * este dato no sabe a dónde ir: en la reserva pública es obligatorio.
+ *
+ * El tope de la entrada en bruto (1000) solo evita procesar textos
+ * absurdos; el límite real (200) se mide DESPUÉS de limpiar, y si se
+ * pasa se rechaza en vez de recortarse, porque una dirección cortada a
+ * la mitad lleva a Yury a la casa equivocada.
+ */
+const serviceAddress = z
+  .string({
+    required_error: 'Cuéntanos la dirección donde haremos el servicio',
+    invalid_type_error: 'Cuéntanos la dirección donde haremos el servicio',
+  })
+  .max(1000, 'La dirección es demasiado larga (máximo 200 caracteres)')
+  .transform((v) => cleanLine(v, { maxLength: 1000 }))
+  .pipe(
+    z
+      .string()
+      .min(5, 'Escribe la dirección completa: calle o carrera, número y barrio')
+      .max(200, 'La dirección es demasiado larga (máximo 200 caracteres)'),
+  );
+
 const cuid = z.string().min(20).max(40).regex(/^[a-z0-9]+$/i, 'Identificador inválido');
 
 export const createBookingSchema = z.object({
@@ -60,6 +83,7 @@ export const createBookingSchema = z.object({
     errorMap: () => ({ message: 'Elige transferencia o efectivo' }),
   }),
   notes: notes,
+  serviceAddress,
   /**
    * De dónde llegó la clienta (utm_source / ref del enlace). Es solo un
    * dato para Yury: se limpia y se recorta en vez de rechazarse, porque

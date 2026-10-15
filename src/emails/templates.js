@@ -38,7 +38,7 @@ const money = (cents, currency = 'COP') =>
   }).format(cents / 100);
 
 const PAYMENT_LABEL = {
-  TRANSFERENCIA: 'Transferencia bancaria',
+  TRANSFERENCIA: 'Transferencia por Nequi o Daviplata',
   EFECTIVO: 'Efectivo el día del servicio',
 };
 
@@ -112,7 +112,48 @@ function priceRow(booking) {
   return ['Valor', amount];
 }
 
-function bookingRows(booking, tz) {
+/**
+ * Línea del abono para separar la fecha, con las mismas reglas que la
+ * web (depositText en frontend/src/lib/format.js), para que la clienta
+ * lea lo mismo en la ficha y en el correo:
+ *   FIXED → "Separas tu fecha con un abono del 50 % ($45.000)"
+ *   FROM  → "… del 50 % del valor final" (el total aún no está cerrado)
+ *   QUOTE → "… del 50 % del valor acordado"
+ * Sin porcentaje en Ajustes (null o 0) no hay política y no se dice nada.
+ * El importe sale del precio guardado en la reserva, no del catálogo de
+ * hoy: si Yury cambia la tarifa después, el abono de esta cita no cambia.
+ */
+export function depositText(depositPercent, booking) {
+  const pct = Number(depositPercent);
+  if (!pct || pct <= 0) return null;
+  const mode = booking.service?.priceMode ?? 'FIXED';
+  if (mode === 'QUOTE') return `Separas tu fecha con un abono del ${pct} % del valor acordado`;
+  if (mode === 'FROM') return `Separas tu fecha con un abono del ${pct} % del valor final`;
+  const amount = money(Math.round(((booking.priceCents ?? 0) * pct) / 100), booking.currency);
+  return `Separas tu fecha con un abono del ${pct} % (${amount})`;
+}
+
+/**
+ * Línea del adicional del domicilio. Yury trabaja 100 % a domicilio:
+ * dentro del perímetro urbano de Pasto cobra un valor fijo (Ajustes →
+ * homeVisitFeeCents) y fuera de la ciudad lo que cueste el transporte,
+ * que se cuadra aparte. Sin valor en Ajustes (null) no se dice nada,
+ * igual que en la web. No se suma al precio de la reserva: ese sigue
+ * siendo el del servicio, que es sobre el que se calcula el abono.
+ */
+export function homeVisitText(homeVisitFeeCents, currency = 'COP') {
+  if (homeVisitFeeCents === null || homeVisitFeeCents === undefined) return null;
+  const fee = Number(homeVisitFeeCents);
+  if (!Number.isFinite(fee) || fee < 0) return null;
+  const urban =
+    fee === 0
+      ? 'Sin costo dentro del perímetro urbano de Pasto'
+      : `Adicional de ${money(fee, currency)} dentro del perímetro urbano de Pasto`;
+  return `${urban}. Fuera de la ciudad, según la tarifa de transporte vigente (taxi / InDrive).`;
+}
+
+function bookingRows(booking, settings) {
+  const tz = settings.timezone;
   const serviceEnd = new Date(booking.startAt.getTime() + booking.service.durationMinutes * 60_000);
   return [
     ['Código', booking.code],
@@ -121,7 +162,12 @@ function bookingRows(booking, tz) {
     ['Ocasión', booking.occasion?.name ?? null],
     ['Fecha', formatLongDate(booking.startAt, tz)],
     ['Hora', `${formatTime(booking.startAt, tz)} – ${formatTime(serviceEnd, tz)}`],
+    // El lugar es el que dio la clienta, nunca una dirección del negocio:
+    // no hay estudio. Las reservas antiguas sin dirección omiten la fila.
+    ['Dirección', booking.serviceAddress ?? null],
     priceRow(booking),
+    ['Domicilio', homeVisitText(settings.homeVisitFeeCents, booking.currency)],
+    ['Abono', depositText(settings.depositPercent, booking)],
     ['Medio de pago', PAYMENT_LABEL[booking.paymentMethod] ?? booking.paymentMethod],
     ['Estado', STATUS_LABEL[booking.status] ?? booking.status],
   ];
@@ -133,45 +179,68 @@ export function bookingReceivedCustomer({ booking, settings }) {
   const tz = settings.timezone;
   const lookupUrl = `${env.APP_URL}/mi-reserva?codigo=${encodeURIComponent(booking.code)}`;
 
-  const transferNote =
-    booking.paymentMethod === 'TRANSFERENCIA' && settings.transferInstructions
+  /*
+   * Con política de abono, quien paga en efectivo también tiene que
+   * adelantar algo para separar la fecha: decirle "no necesitas adelantar
+   * nada" la contradiría, y necesita los datos de pago igual que quien
+   * paga por transferencia.
+   */
+  const hasDeposit = Boolean(depositText(settings.depositPercent, booking));
+  const isTransfer = booking.paymentMethod === 'TRANSFERENCIA';
+  const isCash = booking.paymentMethod === 'EFECTIVO';
+  const showPaymentData = Boolean(settings.transferInstructions) && (isTransfer || hasDeposit);
+  const paymentDataTitle = isTransfer ? 'Datos para la transferencia' : 'Datos para el abono';
+  const cashText = hasDeposit
+    ? 'El resto lo pagas en efectivo el día del servicio.'
+    : 'Pagarás en efectivo el día del servicio. No necesitas adelantar nada.';
+  // Con abono, la fecha queda confirmada al recibir el comprobante; sin
+  // política de abono, la confirmación la da Yury cuando revisa la agenda.
+  const confirmText = hasDeposit
+    ? 'Apenas recibamos el comprobante del abono, te confirmamos la cita.'
+    : 'Te escribiremos para confirmar la cita.';
+  const contactNumber = settings.whatsappNumber || settings.contactPhone;
+
+  const transferNote = [
+    showPaymentData
       ? `<div style="background:${PALETTE.blush};border-radius:12px;padding:16px 18px;margin:0 0 4px;">
-           <strong style="display:block;margin-bottom:6px;">Datos para la transferencia</strong>
+           <strong style="display:block;margin-bottom:6px;">${escapeHtml(paymentDataTitle)}</strong>
            <span style="color:${PALETTE.muted};">${nl2brSafe(settings.transferInstructions)}</span>
          </div>`
-      : booking.paymentMethod === 'EFECTIVO'
-        ? `<p style="margin:0 0 4px;color:${PALETTE.muted};">Pagarás en efectivo el día del servicio. No necesitas adelantar nada.</p>`
-        : '';
+      : '',
+    isCash ? `<p style="margin:${showPaymentData ? '12px' : '0'} 0 4px;color:${PALETTE.muted};">${escapeHtml(cashText)}</p>` : '',
+  ].join('');
 
   const html = layout({
     brand: settings.brandName,
     title: 'Recibimos tu reserva',
     intro: h`Hola ${booking.customerName}, gracias por reservar con nosotras. Estos son los datos de tu cita:`,
     bodyHtml: `
-      ${detailsTable(bookingRows(booking, tz))}
+      ${detailsTable(bookingRows(booking, settings))}
       ${transferNote}
       <p style="margin:18px 0 0;color:${PALETTE.muted};">
-        Te escribiremos para confirmar la cita. Si necesitas cambiar algo, responde este correo
-        o escríbenos por WhatsApp al ${escapeHtml(settings.whatsappNumber || settings.contactPhone)}.
+        ${escapeHtml(confirmText)} Si necesitas cambiar algo, responde este correo
+        o escríbenos por WhatsApp al ${escapeHtml(contactNumber)}.
       </p>
       ${button(lookupUrl, 'Ver mi reserva')}
     `,
-    footerNote: h`${settings.brandName} · ${settings.addressLine} · ${settings.contactPhone}`,
+    // Sin dirección del negocio: no hay estudio al que ir. El lugar de la
+    // cita es el de la clienta y ya va en la tabla.
+    footerNote: h`${settings.brandName} · ${contactNumber}`,
   });
 
   const text = [
     `Hola ${booking.customerName}, recibimos tu reserva.`,
     '',
-    ...bookingRows(booking, tz)
+    ...bookingRows(booking, settings)
       .filter(([, v]) => v)
       .map(([k, v]) => `${k}: ${v}`),
     '',
-    booking.paymentMethod === 'TRANSFERENCIA' && settings.transferInstructions
-      ? `Datos para la transferencia:\n${settings.transferInstructions}`
-      : 'Pagarás en efectivo el día del servicio.',
+    ...(showPaymentData ? [`${paymentDataTitle}:\n${settings.transferInstructions}`] : []),
+    ...(isCash ? [cashText] : []),
     '',
+    confirmText,
     `Consulta tu reserva: ${lookupUrl}`,
-    `${settings.brandName} · ${settings.contactPhone}`,
+    `${settings.brandName} · ${contactNumber}`,
   ].join('\n');
 
   return {
@@ -188,6 +257,18 @@ export function bookingReceivedOwner({ booking, settings }) {
   const tz = settings.timezone;
   const adminUrl = `${env.APP_URL}/admin/reservas?codigo=${encodeURIComponent(booking.code)}`;
   const waNumber = booking.customerPhone.replace(/\D/g, '');
+  // Búsqueda de Maps con la dirección tal cual la escribió la clienta,
+  // para que Yury vea a dónde va antes de pedir el transporte. Casi
+  // nadie escribe la ciudad, y sin ella "Calle 18 # 25-30" cae en
+  // cualquier parte del país; si ya la nombra, no se toca.
+  const mapsQuery = booking.serviceAddress
+    ? /pasto|nari[ñn]o/i.test(booking.serviceAddress)
+      ? booking.serviceAddress
+      : `${booking.serviceAddress}, Pasto, Nariño`
+    : null;
+  const mapsUrl = mapsQuery
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`
+    : null;
 
   const html = layout({
     brand: settings.brandName,
@@ -195,7 +276,7 @@ export function bookingReceivedOwner({ booking, settings }) {
     intro: h`${booking.customerName} acaba de reservar ${booking.service.name}.`,
     bodyHtml: `
       ${detailsTable([
-        ...bookingRows(booking, tz),
+        ...bookingRows(booking, settings),
         ['Cliente', booking.customerName],
         [
           'Teléfono',
@@ -209,6 +290,12 @@ export function bookingReceivedOwner({ booking, settings }) {
             `<a href="mailto:${escapeHtml(booking.customerEmail)}" style="color:${PALETTE.brand};">${escapeHtml(booking.customerEmail)}</a>`,
           ),
         ],
+        [
+          'Cómo llegar',
+          mapsUrl
+            ? safe(`<a href="${escapeHtml(mapsUrl)}" style="color:${PALETTE.brand};">Abrir la dirección en Google Maps</a>`)
+            : null,
+        ],
         ['Tipo de cliente', booking.userId ? 'Registrada' : 'Invitada (sin cuenta)'],
         ['Notas', booking.notes ? nl2brSafe(booking.notes) : null],
       ])}
@@ -220,11 +307,12 @@ export function bookingReceivedOwner({ booking, settings }) {
   const text = [
     `Nueva reserva de ${booking.customerName}`,
     '',
-    ...bookingRows(booking, tz)
+    ...bookingRows(booking, settings)
       .filter(([, v]) => v)
       .map(([k, v]) => `${k}: ${v}`),
     `Teléfono: ${booking.customerPhone}`,
     `Correo: ${booking.customerEmail}`,
+    ...(mapsUrl ? [`Cómo llegar: ${mapsUrl}`] : []),
     `Tipo: ${booking.userId ? 'Registrada' : 'Invitada'}`,
     booking.notes ? `Notas: ${booking.notes}` : '',
     '',
@@ -241,18 +329,34 @@ export function bookingReceivedOwner({ booking, settings }) {
 
 // ── Cambios de estado ────────────────────────────────────────────────
 
+/**
+ * Pautas de preparación (contenido de Yury). Van en la confirmación
+ * porque es el correo que la clienta relee la víspera.
+ */
+const PREPARATION_NOTE =
+  'Para el día de tu cita: ten el cabello limpio y completamente seco, y el rostro limpio ' +
+  'y preparado según las pautas que te damos en la asesoría previa.';
+
+const ADDRESS_CHANGE_NOTE = 'Si la dirección cambia, avísanos por WhatsApp antes del día de la cita.';
+
 export function bookingConfirmed({ booking, settings }) {
   const tz = settings.timezone;
+  /*
+   * El servicio es 100 % a domicilio: el correo dice que vamos hasta la
+   * clienta, nunca "te esperamos en…". Las reservas antiguas sin
+   * dirección se quedan con la frase general.
+   */
+  const placeIntro = booking.serviceAddress
+    ? h`Hola ${booking.customerName}, tu cita quedó confirmada. Nos desplazamos hasta ${booking.serviceAddress}.`
+    : h`Hola ${booking.customerName}, tu cita quedó confirmada. Nos desplazamos hasta donde estés.`;
   const html = layout({
     brand: settings.brandName,
     title: '¡Tu cita está confirmada!',
-    intro: h`Hola ${booking.customerName}, tu cita quedó confirmada. Te esperamos.`,
+    intro: placeIntro,
     bodyHtml: `
-      ${detailsTable(bookingRows(booking, tz))}
-      <p style="margin:0;color:${PALETTE.muted};">
-        ${escapeHtml(settings.addressLine)}<br>
-        ${escapeHtml(settings.businessHoursNote)}
-      </p>
+      ${detailsTable(bookingRows(booking, settings))}
+      <p style="margin:0;color:${PALETTE.muted};">${escapeHtml(PREPARATION_NOTE)}</p>
+      <p style="margin:12px 0 0;color:${PALETTE.muted};">${escapeHtml(ADDRESS_CHANGE_NOTE)}</p>
     `,
     footerNote: h`¿Necesitas reprogramar? Escríbenos al ${settings.whatsappNumber || settings.contactPhone}.`,
   });
@@ -260,11 +364,12 @@ export function bookingConfirmed({ booking, settings }) {
   const text = [
     `Hola ${booking.customerName}, tu cita quedó confirmada.`,
     '',
-    ...bookingRows(booking, tz)
+    ...bookingRows(booking, settings)
       .filter(([, v]) => v)
       .map(([k, v]) => `${k}: ${v}`),
     '',
-    settings.addressLine,
+    PREPARATION_NOTE,
+    ADDRESS_CHANGE_NOTE,
   ].join('\n');
 
   return { subject: `Cita confirmada · ${booking.code}`, html, text };
@@ -279,7 +384,7 @@ export function bookingRescheduled({ booking, settings, previousStart }) {
     bodyHtml: `
       ${detailsTable([
         ['Antes', `${formatLongDate(previousStart, tz)} · ${formatTime(previousStart, tz)}`],
-        ...bookingRows(booking, tz),
+        ...bookingRows(booking, settings),
       ])}
       <p style="margin:0;color:${PALETTE.muted};">Si esta fecha no te sirve, respóndenos y buscamos otra.</p>
     `,
@@ -290,6 +395,7 @@ export function bookingRescheduled({ booking, settings, previousStart }) {
     `Hola ${booking.customerName}, reprogramamos tu cita.`,
     `Antes: ${formatLongDate(previousStart, tz)} ${formatTime(previousStart, tz)}`,
     `Ahora: ${formatLongDate(booking.startAt, tz)} ${formatTime(booking.startAt, tz)}`,
+    ...(booking.serviceAddress ? [`Dirección: ${booking.serviceAddress}`] : []),
   ].join('\n');
 
   return { subject: `Tu cita cambió de fecha · ${booking.code}`, html, text };

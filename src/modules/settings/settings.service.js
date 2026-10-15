@@ -102,6 +102,10 @@ export function publicSettings(settings) {
     mapUrl: settings.mapUrl,
     businessHoursNote: settings.businessHoursNote,
     transferInstructions: settings.transferInstructions,
+    // Política de abono para separar la fecha (null = no se muestra).
+    depositPercent: settings.depositPercent ?? null,
+    // Adicional del domicilio en el perímetro urbano (null = no se muestra).
+    homeVisitFeeCents: settings.homeVisitFeeCents ?? null,
     // La web pública recibe el tema ya resuelto: no sabe nada de fechas.
     theme: effectiveTheme(settings),
     timezone: settings.timezone,

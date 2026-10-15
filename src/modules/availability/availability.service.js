@@ -13,6 +13,8 @@ import { badRequest, notFound } from '../../lib/errors.js';
  *   4. No se solapa con ningún bloqueo de agenda.
  *   5. Respeta la antelación mínima (no se puede reservar "para dentro
  *      de diez minutos") y no está en el pasado.
+ *   6. Cae dentro del horizonte de reservas y, si el servicio tiene
+ *      temporada, dentro de sus fechas (ver isInSeason).
  *
  * El margen (`bufferMinutes`) se aplica al final de cada cita, para
  * limpiar y preparar antes de la siguiente.
@@ -37,6 +39,55 @@ export function bookingHorizon({ service, settings, now }) {
   return now.plus({ days: horizonDays(service, settings) }).endOf('day');
 }
 
+/**
+ * Temporada de un servicio: { from, until } con fechas YYYY-MM-DD (ambas
+ * inclusive, en la zona del negocio), o null si se reserva todo el año.
+ * Puede faltar una de las dos puntas: "desde el 22" o "hasta el 31".
+ *
+ * La temporada limita el DÍA DE LA CITA, no el día en que se reserva:
+ * las catrinas (22–31 oct) se pueden separar desde hoy mismo. Por eso
+ * convive con el horizonte (bookingHorizon) y se aplican los dos.
+ */
+export function serviceSeason(service) {
+  const from = service?.availableFrom || null;
+  const until = service?.availableUntil || null;
+  return from || until ? { from, until } : null;
+}
+
+/**
+ * ¿Se puede agendar ese día (YYYY-MM-DD en la zona del negocio) dentro
+ * de la temporada del servicio? Las fechas se comparan como texto, igual
+ * que el tema de temporada de Ajustes. Es la ÚNICA regla de temporada:
+ * la usan el calendario, la lista de horarios, "próximo horario libre",
+ * la creación y la reprogramación, para que ninguna ofrezca un día que
+ * otra rechace.
+ */
+export function isInSeason(service, dateISO) {
+  const season = serviceSeason(service);
+  if (!season) return true;
+  return (!season.from || dateISO >= season.from) && (!season.until || dateISO <= season.until);
+}
+
+/** "2026-10-22" → "22 de octubre". */
+const dayMonth = (dateISO) => DateTime.fromISO(dateISO).setLocale('es').toFormat("d 'de' LLLL");
+
+/**
+ * Mensaje para quien intenta reservar fuera de temporada, con la misma
+ * forma que muestra la web: "del 22 al 31 de octubre" si es el mismo mes.
+ */
+export function seasonMessage(service) {
+  const season = serviceSeason(service);
+  if (!season) return null;
+  const { from, until } = season;
+  if (from && until) {
+    const sameMonth = from.slice(0, 7) === until.slice(0, 7);
+    const start = sameMonth ? String(Number(from.slice(8, 10))) : dayMonth(from);
+    return `Este servicio solo se reserva del ${start} al ${dayMonth(until)}.`;
+  }
+  if (from) return `Este servicio se reserva a partir del ${dayMonth(from)}.`;
+  return `Este servicio solo se reserva hasta el ${dayMonth(until)}.`;
+}
+
 export async function getAvailabilityRules() {
   return prisma.availabilityRule.findMany({
     orderBy: [{ weekday: 'asc' }, { startTime: 'asc' }],
@@ -55,7 +106,14 @@ export async function getSlotsForDate({ serviceId, date: dateISO }) {
 
   const service = await prisma.service.findFirst({
     where: { id: serviceId, active: true },
-    select: { id: true, durationMinutes: true, name: true, maxAdvanceDays: true },
+    select: {
+      id: true,
+      durationMinutes: true,
+      name: true,
+      maxAdvanceDays: true,
+      availableFrom: true,
+      availableUntil: true,
+    },
   });
   if (!service) throw notFound('El servicio no existe o no está disponible');
 
@@ -64,7 +122,7 @@ export async function getSlotsForDate({ serviceId, date: dateISO }) {
 
   // Ventana de reserva: ni pasado ni más allá del horizonte permitido.
   const horizon = bookingHorizon({ service, settings, now });
-  if (day.endOf('day') < now.startOf('day') || day > horizon) {
+  if (day.endOf('day') < now.startOf('day') || day > horizon || !isInSeason(service, dateISO)) {
     return { date: dateISO, timezone: tz, slots: [] };
   }
 
@@ -152,7 +210,7 @@ export async function getMonthAvailability({ serviceId, year, month }) {
 
   const service = await prisma.service.findFirst({
     where: { id: serviceId, active: true },
-    select: { id: true, durationMinutes: true, maxAdvanceDays: true },
+    select: { id: true, durationMinutes: true, maxAdvanceDays: true, availableFrom: true, availableUntil: true },
   });
   if (!service) throw notFound('El servicio no existe o no está disponible');
 
@@ -208,9 +266,17 @@ export async function getMonthAvailability({ serviceId, year, month }) {
      * "lleno" (Yury está ocupada) o "aún no abierto" (pasa del horizonte
      * de reservas: se puede pedir por WhatsApp). Si todo saliera igual de
      * gris, una novia que busca junio entendería que no hay cupo.
+     *
+     * "Fuera de temporada" va antes que "aún no abierto": un día que cae
+     * fuera de las fechas del servicio no se abrirá nunca, por mucho que
+     * pase el tiempo, y decirle a la clienta que espere sería engañarla.
      */
     if (day.endOf('day') < earliest) {
       days.push({ date: dateISO, available: false, slotCount: 0, reason: 'past' });
+      continue;
+    }
+    if (!isInSeason(service, dateISO)) {
+      days.push({ date: dateISO, available: false, slotCount: 0, reason: 'season' });
       continue;
     }
     if (day > horizon) {
@@ -247,6 +313,9 @@ export async function getMonthAvailability({ serviceId, year, month }) {
     // del último mes reservable y explicar por qué.
     maxAdvanceDays: horizonDays(service, settings),
     lastBookableDate: horizon.toISODate(),
+    // Temporada del servicio ({ from, until } o null), para que la web
+    // explique por qué esos días no se pueden elegir.
+    season: serviceSeason(service),
     days,
   };
 }
@@ -259,6 +328,11 @@ export async function getMonthAvailability({ serviceId, year, month }) {
  * el primer día con cupo, pide sus horarios: así el resultado es
  * exactamente lo que la clienta vería al tocar ese día. Se corta a los
  * 13 meses como red de seguridad (el horizonte máximo es de 365 días).
+ *
+ * Con temporada, la búsqueda empieza el primer día de la temporada (si
+ * aún no ha llegado) y termina en su último día: así las catrinas no
+ * recorren meses enteros fuera de fechas, y cuando la temporada ya pasó
+ * la respuesta es "no hay" (date: null) en vez de un día imposible.
  */
 export async function getNextAvailable({ serviceId, after }) {
   const settings = await getSettings();
@@ -266,11 +340,24 @@ export async function getNextAvailable({ serviceId, after }) {
   const now = DateTime.now().setZone(tz);
 
   if (after && !isValidDateISO(after)) throw badRequest('Fecha inválida');
+
+  const service = await prisma.service.findFirst({
+    where: { id: serviceId, active: true },
+    select: { id: true, maxAdvanceDays: true, availableFrom: true, availableUntil: true },
+  });
+  if (!service) throw notFound('El servicio no existe o no está disponible');
+
   // Un `after` del pasado no puede hacer recorrer meses ya cerrados: se
-  // busca desde hoy como mínimo.
+  // busca desde hoy como mínimo, y nunca antes de que abra la temporada.
   const afterISO = after ? DateTime.fromISO(after, { zone: tz }).plus({ days: 1 }).toISODate() : null;
-  const todayISO = now.toISODate();
-  const fromISO = afterISO && afterISO > todayISO ? afterISO : todayISO;
+  const season = serviceSeason(service);
+  const fromISO = [now.toISODate(), afterISO, season?.from].filter(Boolean).sort().at(-1);
+
+  // Último día en el que tiene sentido buscar: el horizonte de reservas o
+  // el fin de la temporada, lo que llegue antes. Rigen los dos límites.
+  const lastBookableDate = bookingHorizon({ service, settings, now }).toISODate();
+  const endISO = season?.until && season.until < lastBookableDate ? season.until : lastBookableDate;
+  if (fromISO > endISO) return { date: null, slot: null, lastBookableDate };
 
   let cursor = DateTime.fromISO(fromISO, { zone: tz }).startOf('month');
   for (let i = 0; i < 13; i += 1) {
@@ -278,11 +365,11 @@ export async function getNextAvailable({ serviceId, after }) {
     // Normalmente el primer día con cupo ya tiene horarios, pero si no
     // (p. ej. el de hoy al cruzar la antelación mínima) se sigue con el
     // siguiente del mismo mes en vez de saltar al mes que viene.
-    for (const day of month.days.filter((d) => d.available && d.date >= fromISO)) {
+    for (const day of month.days.filter((d) => d.available && d.date >= fromISO && d.date <= endISO)) {
       const { slots } = await getSlotsForDate({ serviceId, date: day.date });
       if (slots.length > 0) return { date: day.date, slot: slots[0], lastBookableDate: month.lastBookableDate };
     }
-    if (cursor.endOf('month').toISODate() >= month.lastBookableDate) {
+    if (cursor.endOf('month').toISODate() >= endISO) {
       return { date: null, slot: null, lastBookableDate: month.lastBookableDate };
     }
     cursor = cursor.plus({ months: 1 });

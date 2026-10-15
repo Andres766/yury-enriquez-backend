@@ -1,6 +1,7 @@
 /**
  * Prueba de integración del catálogo: modo de precio, "Qué incluye",
- * anticipación por servicio y edición de ocasiones desde el panel.
+ * anticipación y temporada por servicio, categoría Taller y edición de
+ * ocasiones desde el panel.
  *
  * Requiere la base sembrada:
  *     npm run setup
@@ -169,6 +170,9 @@ try {
         priceMode: s.priceMode,
         includes: s.includes,
         maxAdvanceDays: s.maxAdvanceDays,
+        category: s.category,
+        availableFrom: s.availableFrom,
+        availableUntil: s.availableUntil,
         images: s.images.map(({ url, alt }) => ({ url, alt })),
       },
     };
@@ -243,6 +247,108 @@ try {
       });
       check(`Una foto con URL "${url}" se rechaza`, res.status === 400);
     }
+
+    // Temporada: solo se reserva para días entre estas fechas (catrinas).
+    const temporada = await admin.request(`/services/admin/${service.id}`, {
+      method: 'PATCH',
+      body: { availableFrom: '2026-10-22', availableUntil: ' 2026-10-31 ' },
+    });
+    check(
+      'La administradora fija la temporada del servicio',
+      temporada.status === 200 &&
+        temporada.data.service.availableFrom === '2026-10-22' &&
+        temporada.data.service.availableUntil === '2026-10-31',
+      `recibido ${temporada.status}: ${fieldsOf(temporada)}`,
+    );
+    const fichaTemporada = await guest.request(`/services/${service.slug}`);
+    check(
+      'La ficha pública trae la temporada',
+      fichaTemporada.data?.service?.availableFrom === '2026-10-22' && fichaTemporada.data.service.availableUntil === '2026-10-31',
+    );
+    const listaTemporada = await guest.request('/services');
+    check(
+      'El listado público trae availableFrom/availableUntil en todos los servicios',
+      (listaTemporada.data?.services ?? []).every((x) => 'availableFrom' in x && 'availableUntil' in x),
+    );
+
+    const finAntes = await admin.request(`/services/admin/${service.id}`, {
+      method: 'PATCH',
+      body: { availableUntil: '2026-10-20' },
+    });
+    check(
+      'Un fin anterior al inicio ya guardado se rechaza en el campo de fin',
+      finAntes.status === 400 && fieldsOf(finAntes).includes('availableUntil'),
+      `recibido ${finAntes.status}: ${fieldsOf(finAntes)}`,
+    );
+
+    for (const fecha of ['2026-02-30', '22/10/2026', '2026-1-5', 20261022]) {
+      const res = await admin.request(`/services/admin/${service.id}`, {
+        method: 'PATCH',
+        body: { availableFrom: fecha },
+      });
+      check(`Una fecha de inicio ${JSON.stringify(fecha)} se rechaza`, res.status === 400 && fieldsOf(res).includes('availableFrom'),
+        `recibido ${res.status}: ${fieldsOf(res)}`);
+    }
+
+    const soloInicio = await admin.request(`/services/admin/${service.id}`, {
+      method: 'PATCH',
+      body: { availableUntil: '' },
+    });
+    check(
+      'Se puede dejar solo la fecha de inicio (vacío = sin fin)',
+      soloInicio.status === 200 && soloInicio.data.service.availableFrom === '2026-10-22' && soloInicio.data.service.availableUntil === null,
+    );
+
+    const sinTemporada = await admin.request(`/services/admin/${service.id}`, {
+      method: 'PATCH',
+      body: { availableFrom: null, availableUntil: null },
+    });
+    check(
+      'Con null en las dos fechas el servicio vuelve a todo el año',
+      sinTemporada.status === 200 && sinTemporada.data.service.availableFrom === null && sinTemporada.data.service.availableUntil === null,
+    );
+
+    const crearAlReves = await admin.request('/services/admin', {
+      method: 'POST',
+      body: {
+        name: `Prueba temporada e2e ${Date.now()}`,
+        category: 'TALLER',
+        shortDescription: 'Prueba',
+        description: 'Prueba automática',
+        durationMinutes: 60,
+        priceCents: 0,
+        availableFrom: '2026-10-31',
+        availableUntil: '2026-10-22',
+      },
+    });
+    if (crearAlReves.data?.service?.id) {
+      await admin.request(`/services/admin/${crearAlReves.data.service.id}`, { method: 'DELETE' });
+    }
+    check(
+      'Al crear, una temporada al revés también se rechaza',
+      crearAlReves.status === 400 && fieldsOf(crearAlReves).includes('availableUntil'),
+      `recibido ${crearAlReves.status}: ${fieldsOf(crearAlReves)}`,
+    );
+
+    // Categoría Taller (talleres de automaquillaje).
+    const taller = await admin.request(`/services/admin/${service.id}`, {
+      method: 'PATCH',
+      body: { category: 'TALLER' },
+    });
+    check('La categoría TALLER se acepta', taller.status === 200 && taller.data.service.category === 'TALLER',
+      `recibido ${taller.status}: ${fieldsOf(taller)}`);
+    const filtroTaller = await guest.request('/services?category=TALLER');
+    check(
+      'El filtro público por TALLER funciona',
+      filtroTaller.status === 200 &&
+        filtroTaller.data.services.some((x) => x.id === service.id) &&
+        filtroTaller.data.services.every((x) => x.category === 'TALLER'),
+    );
+    const categoriaMala = await admin.request(`/services/admin/${service.id}`, {
+      method: 'PATCH',
+      body: { category: 'CURSO' },
+    });
+    check('Una categoría inventada se rechaza', categoriaMala.status === 400 && fieldsOf(categoriaMala).includes('category'));
 
     const comoClienta = await client.request(`/services/admin/${service.id}`, {
       method: 'PATCH',

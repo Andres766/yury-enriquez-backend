@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { cleanText } from '../../lib/sanitize.js';
+import { isValidDateISO } from '../../lib/time.js';
+
+export const SERVICE_CATEGORIES = ['MAQUILLAJE', 'PEINADO', 'PAQUETE', 'TALLER'];
 
 const text = (max, msg) =>
   z
@@ -51,9 +54,21 @@ const includesList = z
   ])
   .pipe(z.array(z.string()).max(12, 'Máximo 12 viñetas'));
 
+/**
+ * Fecha de calendario YYYY-MM-DD para la temporada; vacío o null la
+ * borra. Misma regla que las fechas del tema de temporada en Ajustes:
+ * formato exacto y día real (nada de 30 de febrero). Que el fin no sea
+ * anterior al inicio se comprueba en el servicio, porque un PATCH puede
+ * traer solo una de las dos fechas.
+ */
+const calendarDate = z
+  .union([z.string().trim(), z.null()], { errorMap: () => ({ message: 'Fecha no válida (AAAA-MM-DD)' }) })
+  .transform((v) => (v ? v : null))
+  .refine((v) => v === null || (/^\d{4}-\d{2}-\d{2}$/.test(v) && isValidDateISO(v)), 'Fecha no válida (AAAA-MM-DD)');
+
 const baseService = {
   name: text(120, 'El nombre es obligatorio'),
-  category: z.enum(['MAQUILLAJE', 'PEINADO', 'PAQUETE']),
+  category: z.enum(SERVICE_CATEGORIES, { errorMap: () => ({ message: 'Elige una categoría' }) }),
   shortDescription: text(240, 'Escribe una descripción corta'),
   description: text(4000, 'Escribe la descripción detallada'),
   durationMinutes: z.coerce.number().int().min(15, 'Mínimo 15 minutos').max(600),
@@ -78,6 +93,10 @@ const baseService = {
     .max(730, 'Máximo 730 días (dos años)')
     .nullable()
     .default(null),
+  // Temporada: solo se reserva PARA días entre estas fechas (inclusive).
+  // null en las dos = todo el año.
+  availableFrom: calendarDate.default(null),
+  availableUntil: calendarDate.default(null),
 };
 
 export const createServiceSchema = z.object(baseService);
@@ -88,7 +107,7 @@ export const updateServiceSchema = z
   .refine((v) => Object.keys(v).length > 0, 'No hay cambios que guardar');
 
 export const listServicesQuerySchema = z.object({
-  category: z.enum(['MAQUILLAJE', 'PEINADO', 'PAQUETE']).optional(),
+  category: z.enum(SERVICE_CATEGORIES).optional(),
   occasion: z
     .string()
     .max(60)

@@ -25,6 +25,7 @@ enum ServiceCategory {
   MAQUILLAJE
   PEINADO
   PAQUETE
+  TALLER
 }
 
 /// Cómo se muestra el precio de un servicio.
@@ -131,6 +132,11 @@ model Service {
   /// Si se fija, reemplaza a Settings.maxAdvanceDays para este servicio:
   /// las novias reservan con muchos meses de anticipación.
   maxAdvanceDays   Int?
+  /// Temporada del servicio (YYYY-MM-DD, ambas inclusive, en la zona del
+  /// negocio). Si se fijan, solo se puede reservar para días dentro de
+  /// ese rango, aunque la reserva se haga antes (catrinas: 22–31 oct).
+  availableFrom    String?
+  availableUntil   String?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
@@ -243,6 +249,8 @@ model Booking {
   customerEmail String
   customerPhone String
   notes         String?
+  /// Dónde se presta el servicio. Yury trabaja 100 % a domicilio.
+  serviceAddress String?
   adminNotes    String?
   startAt       DateTime
   endAt         DateTime
@@ -336,6 +344,12 @@ model Settings {
   businessHoursNote      String   @default("")
   ownerNotificationEmail String   @default("")
   transferInstructions   String   @default("")
+  /// Porcentaje del valor que se abona para separar la fecha (0–100).
+  /// Null = no se muestra ninguna política de abono.
+  depositPercent         Int?
+  /// Adicional del domicilio dentro del perímetro urbano, en centavos.
+  /// Null = no se muestra. Fuera de la ciudad se cotiza aparte.
+  homeVisitFeeCents      Int?
   theme                  SiteTheme @default(LIGHT)
   /// Tema de temporada programado. Entre seasonalStartDate y
   /// seasonalEndDate (YYYY-MM-DD, ambos inclusive, en `timezone`) la web

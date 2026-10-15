@@ -41,11 +41,54 @@ const settingsBody = z.object({
   instagramUrl: httpUrl,
   tiktokUrl: httpUrl,
   facebookUrl: httpUrl,
+  // Dato opcional del negocio. Yury trabaja a domicilio, así que esto
+  // NUNCA es "el lugar de tu cita": ese es Booking.serviceAddress.
   addressLine: text(200),
   mapUrl: httpUrl,
   businessHoursNote: text(300),
   ownerNotificationEmail: z.string().transform(cleanEmail).pipe(z.string().email().or(z.literal(''))),
   transferInstructions: text(1000),
+  /**
+   * Porcentaje del valor que se abona para separar la fecha (0–100).
+   * Vacío o null = sin política de abono: la web y los correos no dicen
+   * nada. Se acepta "50" como texto porque así llega de un <input>, pero
+   * el vacío NO se convierte en 0 (z.coerce lo haría), que significaría
+   * otra cosa.
+   */
+  depositPercent: z.preprocess(
+    (v) => {
+      const raw = typeof v === 'string' ? v.trim() : v;
+      if (raw === '' || raw === null) return null;
+      return typeof raw === 'string' ? Number(raw) : raw;
+    },
+    z
+      .number({ invalid_type_error: 'Escribe un porcentaje entre 0 y 100' })
+      .int('Escribe un porcentaje entero')
+      .min(0, 'El abono no puede ser negativo')
+      .max(100, 'El abono no puede pasar del 100 %')
+      .nullable(),
+  ),
+  /**
+   * Adicional del domicilio dentro del perímetro urbano, en centavos
+   * (21.000 pesos = 2100000). Vacío o null = no se muestra; 0 sí es un
+   * valor (domicilio sin costo), por eso el vacío no se convierte en 0.
+   * Fuera de la ciudad no hay tarifa fija: se cotiza según el transporte,
+   * así que aquí solo vive la urbana. El tope (100.000 pesos) solo frena
+   * un cero de más tecleado por error.
+   */
+  homeVisitFeeCents: z.preprocess(
+    (v) => {
+      const raw = typeof v === 'string' ? v.trim() : v;
+      if (raw === '' || raw === null) return null;
+      return typeof raw === 'string' ? Number(raw) : raw;
+    },
+    z
+      .number({ invalid_type_error: 'Escribe el valor del domicilio en números' })
+      .int('El valor del domicilio va en centavos enteros')
+      .min(0, 'El domicilio no puede ser negativo')
+      .max(10_000_000, 'Ese valor de domicilio es demasiado alto')
+      .nullable(),
+  ),
   /**
    * Tema visual del sitio publico. No existe ninguna ruta que permita
    * cambiarlo sin ser administradora: las visitantes no tienen selector,

@@ -27,6 +27,13 @@ const server = await new Promise((resolve) => {
 });
 const base = `http://127.0.0.1:${server.address().port}`;
 
+/*
+ * Yury trabaja 100 % a domicilio y la reserva pública exige la dirección
+ * del servicio. Todas las reservas de la prueba llevan esta, salvo las
+ * de la sección 14, que prueban justamente su validación.
+ */
+const DIRECCION = 'Calle 18 # 25-30, barrio Centro';
+
 let passed = 0;
 let failed = 0;
 const created = { bookingCodes: [], userEmails: [] };
@@ -197,6 +204,7 @@ let guestBooking;
     customerPhone: '+573001112233',
     paymentMethod: 'TRANSFERENCIA',
     notes: 'Prueba automática. Tonos <script>alert(1)</script> cálidos.',
+    serviceAddress: DIRECCION,
   };
 
   const res = await guest.request('/bookings', { method: 'POST', body: payload });
@@ -237,6 +245,7 @@ console.log('\n4. Protección contra doble reserva');
       customerEmail: 'otra.persona@ejemplo.test',
       customerPhone: '+573004445566',
       paymentMethod: 'EFECTIVO',
+      serviceAddress: DIRECCION,
     },
   });
   check('El mismo horario se rechaza con 409', duplicada.status === 409, `recibido ${duplicada.status}`);
@@ -268,6 +277,7 @@ console.log('\n4. Protección contra doble reserva');
             customerEmail: `carrera${i}@ejemplo.test`,
             customerPhone: `+57300000000${i}`,
             paymentMethod: 'EFECTIVO',
+            serviceAddress: DIRECCION,
           },
         }),
       ),
@@ -299,6 +309,7 @@ console.log('\n4. Protección contra doble reserva');
       customerEmail: 'pasado@ejemplo.test',
       customerPhone: '+573007778899',
       paymentMethod: 'EFECTIVO',
+      serviceAddress: DIRECCION,
     },
   });
   check('Una fecha pasada se rechaza', pasada.status === 400 || pasada.status === 409, `recibido ${pasada.status}`);
@@ -314,6 +325,7 @@ console.log('\n4. Protección contra doble reserva');
       customerEmail: 'madrugada@ejemplo.test',
       customerPhone: '+573009990011',
       paymentMethod: 'EFECTIVO',
+      serviceAddress: DIRECCION,
     },
   });
   check('Un horario fuera de la agenda se rechaza', fuera.status === 409 || fuera.status === 400,
@@ -399,6 +411,7 @@ const client = createSession();
         customerEmail: email,
         customerPhone: '+573001234567',
         paymentMethod: 'EFECTIVO',
+        serviceAddress: DIRECCION,
       },
     });
     if (res.data.booking) created.bookingCodes.push(res.data.booking.code);
@@ -713,6 +726,7 @@ console.log('\n11. Celular sin indicativo, origen de la reserva y horizonte por 
         customerName: 'Prueba Origen',
         customerEmail: 'prueba.origen@ejemplo.test',
         paymentMethod: 'EFECTIVO',
+        serviceAddress: DIRECCION,
         ...extra,
       },
     });
@@ -806,6 +820,303 @@ console.log('\n11. Celular sin indicativo, origen de la reserva y horizonte por 
   );
   const despues = await guest.request(`/availability/next?serviceId=${service.id}&after=${proximo.data.date}`);
   check('Con ?after= busca a partir del día siguiente', despues.status === 200 && (despues.data.date ?? '9') > proximo.data.date);
+}
+
+// ── 12. Temporada por servicio ──────────────────────────────────────
+console.log('\n12. Temporada por servicio (catrinas: solo del 22 al 31 de octubre)');
+{
+  /*
+   * Se le pone temporada a un servicio distinto del principal, con fechas
+   * calculadas a partir de sus días con cupo de verdad: así siempre hay
+   * días abiertos antes, dentro y después de la temporada, sea cual sea
+   * el día en que se ejecute la prueba. Al final se deja como estaba.
+   */
+  const temporada = (
+    await prisma.service.findMany({ where: { active: true, NOT: { id: service.id } }, orderBy: { sortOrder: 'desc' }, take: 1 })
+  )[0];
+  const original = { availableFrom: temporada.availableFrom, availableUntil: temporada.availableUntil };
+  const ponerTemporada = (data) => prisma.service.update({ where: { id: temporada.id }, data });
+
+  try {
+    const now = DateTime.now();
+    const mesDe = async (dt) =>
+      guest.request(`/availability/month?serviceId=${temporada.id}&year=${dt.year}&month=${dt.month}`);
+
+    let abiertos = [];
+    for (const m of [now, now.plus({ months: 1 })]) {
+      abiertos = abiertos.concat(((await mesDe(m)).data.days ?? []).filter((d) => d.available));
+    }
+    abiertos.sort((a, b) => a.date.localeCompare(b.date));
+    check('Hay días abiertos suficientes para probar la temporada', abiertos.length >= 7, `hay ${abiertos.length}`);
+
+    const antes = abiertos[0].date;
+    const desde = abiertos[2].date;
+    const hasta = abiertos[4].date;
+    const despues = abiertos[6].date;
+    const slotFuera = (await guest.request(`/availability/slots?serviceId=${temporada.id}&date=${antes}`)).data.slots?.[0];
+
+    await ponerTemporada({ availableFrom: desde, availableUntil: hasta });
+
+    // El calendario: fuera de las fechas sale "season", dentro sigue igual.
+    const dias = new Map();
+    for (const m of [...new Set([antes, despues].map((d) => d.slice(0, 7)))]) {
+      const [y, mo] = m.split('-').map(Number);
+      const res = await guest.request(`/availability/month?serviceId=${temporada.id}&year=${y}&month=${mo}`);
+      check(`El mes ${m} informa la temporada del servicio`,
+        res.data.season?.from === desde && res.data.season?.until === hasta, JSON.stringify(res.data.season));
+      for (const d of res.data.days ?? []) dias.set(d.date, d);
+    }
+    check('Un día abierto antes de la temporada sale como "season"', dias.get(antes)?.reason === 'season',
+      JSON.stringify(dias.get(antes)));
+    check('Un día abierto después de la temporada sale como "season"', dias.get(despues)?.reason === 'season',
+      JSON.stringify(dias.get(despues)));
+    check('Los días dentro de la temporada siguen disponibles', dias.get(desde)?.available === true);
+
+    const sinSeason = await guest.request(`/availability/month?serviceId=${service.id}&year=${now.year}&month=${now.month}`);
+    check('Un servicio de todo el año responde season: null', sinSeason.data.season === null);
+
+    const huecosFuera = await guest.request(`/availability/slots?serviceId=${temporada.id}&date=${antes}`);
+    check('Fuera de la temporada no hay horarios', huecosFuera.status === 200 && huecosFuera.data.slots.length === 0);
+
+    // "Próximo horario libre" nunca sale de la temporada.
+    const proximo = await guest.request(`/availability/next?serviceId=${temporada.id}`);
+    check(
+      'El próximo horario libre cae dentro de la temporada',
+      proximo.status === 200 && proximo.data.date >= desde && proximo.data.date <= hasta,
+      JSON.stringify(proximo.data).slice(0, 200),
+    );
+    const trasTemporada = await guest.request(`/availability/next?serviceId=${temporada.id}&after=${hasta}`);
+    check('Pasado el último día de temporada no hay "próximo" (date: null)',
+      trasTemporada.status === 200 && trasTemporada.data.date === null, JSON.stringify(trasTemporada.data).slice(0, 200));
+
+    // Reservas: fuera se rechazan con un mensaje claro, dentro se aceptan.
+    const reservar = (startAt) =>
+      guest.request('/bookings', {
+        method: 'POST',
+        body: {
+          serviceId: temporada.id,
+          startAt,
+          customerName: 'Prueba Temporada',
+          customerEmail: 'prueba.temporada@ejemplo.test',
+          customerPhone: '3005559911',
+          paymentMethod: 'EFECTIVO',
+          serviceAddress: DIRECCION,
+        },
+      });
+
+    const fuera = await reservar(slotFuera?.start);
+    if (fuera.data.booking) created.bookingCodes.push(fuera.data.booking.code);
+    check('Una reserva fuera de la temporada se rechaza con 400', fuera.status === 400, `recibido ${fuera.status}`);
+    check(
+      'El rechazo explica las fechas de la temporada',
+      fuera.data?.code === 'OUT_OF_SEASON' && /solo se reserva del/.test(fuera.data?.error ?? ''),
+      JSON.stringify(fuera.data),
+    );
+
+    const dentro = await reservar(proximo.data.slot?.start);
+    if (dentro.data.booking) created.bookingCodes.push(dentro.data.booking.code);
+    check('Una reserva dentro de la temporada se acepta', dentro.status === 201,
+      `recibido ${dentro.status}: ${dentro.data?.error ?? ''}`);
+
+    if (dentro.data.booking && slotFuera) {
+      const repro = await admin.request(`/bookings/admin/${dentro.data.booking.id}/reschedule`, {
+        method: 'PATCH',
+        body: { startAt: slotFuera.start },
+      });
+      check('Reprogramar fuera de la temporada también se rechaza', repro.status === 400 && repro.data?.code === 'OUT_OF_SEASON',
+        `recibido ${repro.status}: ${repro.data?.error ?? ''}`);
+    }
+
+    // Temporada y horizonte se suman: una temporada más allá del horizonte
+    // no ofrece nada todavía.
+    const horizonte = (await mesDe(now)).data.lastBookableDate;
+    const lejos = DateTime.fromISO(horizonte).plus({ days: 1 });
+    await ponerTemporada({ availableFrom: lejos.toISODate(), availableUntil: lejos.plus({ days: 9 }).toISODate() });
+    const lejana = await guest.request(`/availability/next?serviceId=${temporada.id}`);
+    check('Una temporada más allá del horizonte aún no ofrece horarios', lejana.status === 200 && lejana.data.date === null,
+      JSON.stringify(lejana.data).slice(0, 200));
+  } finally {
+    await ponerTemporada(original);
+  }
+  const restaurado = await prisma.service.findUnique({ where: { id: temporada.id } });
+  check('El servicio vuelve a su temporada original',
+    restaurado.availableFrom === original.availableFrom && restaurado.availableUntil === original.availableUntil);
+}
+
+// ── 13. Abono para separar la fecha ─────────────────────────────────
+console.log('\n13. Porcentaje de abono');
+{
+  const original = (await admin.request('/settings/admin')).data.settings.depositPercent ?? null;
+  const fieldsOf = (res) => (res.data?.details ?? []).map((d) => d.field).join(', ');
+
+  try {
+    for (const malo of [101, -1, 12.5, 'mitad']) {
+      const res = await admin.request('/settings/admin', { method: 'PATCH', body: { depositPercent: malo } });
+      check(`Un abono de ${JSON.stringify(malo)} se rechaza`, res.status === 400 && fieldsOf(res).includes('depositPercent'),
+        `recibido ${res.status}: ${fieldsOf(res)}`);
+    }
+
+    const cincuenta = await admin.request('/settings/admin', { method: 'PATCH', body: { depositPercent: 50 } });
+    check('Un abono del 50 % se guarda', cincuenta.status === 200 && cincuenta.data.settings.depositPercent === 50);
+    check('La web pública recibe el porcentaje', (await guest.request('/settings')).data.settings.depositPercent === 50);
+
+    const texto = await admin.request('/settings/admin', { method: 'PATCH', body: { depositPercent: '30' } });
+    check('Llega como texto desde el formulario y se guarda como número', texto.data?.settings?.depositPercent === 30);
+
+    const vacio = await admin.request('/settings/admin', { method: 'PATCH', body: { depositPercent: '' } });
+    check('Vaciarlo lo deja en null (no en 0)', vacio.status === 200 && vacio.data.settings.depositPercent === null);
+
+    const nulo = await admin.request('/settings/admin', { method: 'PATCH', body: { depositPercent: null } });
+    check('null se acepta', nulo.status === 200 && nulo.data.settings.depositPercent === null);
+    const publico = (await guest.request('/settings')).data.settings;
+    check('Sin política, la web pública recibe depositPercent: null', 'depositPercent' in publico && publico.depositPercent === null);
+
+    const comoClienta = await client.request('/settings/admin', { method: 'PATCH', body: { depositPercent: 0 } });
+    check('Una clienta NO puede cambiar el abono', comoClienta.status === 403);
+  } finally {
+    await admin.request('/settings/admin', { method: 'PATCH', body: { depositPercent: original } });
+  }
+  const restaurado = (await admin.request('/settings/admin')).data.settings.depositPercent ?? null;
+  check('Se restaura el abono original', restaurado === original, `quedó ${restaurado}`);
+}
+
+// ── 14. Dirección del servicio (100 % a domicilio) ──────────────────
+console.log('\n14. Dirección del servicio');
+{
+  const fieldsOf = (res) => (res.data?.details ?? []).map((d) => d.field).join(', ');
+  const proximo = await guest.request(`/availability/next?serviceId=${service.id}`);
+  const startAt = proximo.data.slot?.start;
+  check('Hay un horario libre para probar la dirección', Boolean(startAt), JSON.stringify(proximo.data).slice(0, 200));
+
+  const reservar = (extra) =>
+    guest.request('/bookings', {
+      method: 'POST',
+      body: {
+        serviceId: service.id,
+        startAt,
+        customerName: 'Prueba Domicilio',
+        customerEmail: 'prueba.domicilio@ejemplo.test',
+        customerPhone: '3005553311',
+        paymentMethod: 'EFECTIVO',
+        ...extra,
+      },
+    });
+
+  // La validación va antes que la agenda: estas no llegan a ocupar el hueco.
+  const sinDireccion = await reservar({});
+  if (sinDireccion.data.booking) created.bookingCodes.push(sinDireccion.data.booking.code);
+  check('Sin dirección, la reserva pública se rechaza con 400', sinDireccion.status === 400,
+    `recibido ${sinDireccion.status}`);
+  check('El error señala el campo serviceAddress', fieldsOf(sinDireccion).includes('serviceAddress'),
+    `campos: ${fieldsOf(sinDireccion)}`);
+
+  const nula = await reservar({ serviceAddress: null });
+  if (nula.data.booking) created.bookingCodes.push(nula.data.booking.code);
+  check('Una dirección null también se rechaza', nula.status === 400 && fieldsOf(nula).includes('serviceAddress'),
+    `recibido ${nula.status}: ${fieldsOf(nula)}`);
+
+  // "ab" con espacios alrededor: tras limpiar quedan 2 caracteres.
+  const corta = await reservar({ serviceAddress: '   ab   ' });
+  if (corta.data.booking) created.bookingCodes.push(corta.data.booking.code);
+  check('Una dirección demasiado corta se rechaza con 400', corta.status === 400 && fieldsOf(corta).includes('serviceAddress'),
+    `recibido ${corta.status}: ${fieldsOf(corta)}`);
+
+  const larga = await reservar({ serviceAddress: `Calle 18 # 25-30 ${'x'.repeat(190)}` });
+  if (larga.data.booking) created.bookingCodes.push(larga.data.booking.code);
+  check('Una dirección de más de 200 caracteres se rechaza (no se recorta)',
+    larga.status === 400 && fieldsOf(larga).includes('serviceAddress'), `recibido ${larga.status}: ${fieldsOf(larga)}`);
+
+  const enBruto = '   Carrera 27   # 15-40,\n   barrio San Ignacio, casa esquinera   ';
+  const esperada = 'Carrera 27 # 15-40, barrio San Ignacio, casa esquinera';
+  const ok = await reservar({ serviceAddress: enBruto });
+  const reserva = ok.data.booking;
+  if (reserva) created.bookingCodes.push(reserva.code);
+  check('Con una dirección válida la reserva se crea', ok.status === 201, `recibido ${ok.status}: ${ok.data?.error ?? ''}`);
+  check('La respuesta trae la dirección limpia', reserva?.serviceAddress === esperada, `recibido ${JSON.stringify(reserva?.serviceAddress)}`);
+
+  const guardada = reserva ? await prisma.booking.findUnique({ where: { code: reserva.code } }) : null;
+  check('Se guarda sin espacios sobrantes y en una sola línea', guardada?.serviceAddress === esperada,
+    `guardado ${JSON.stringify(guardada?.serviceAddress)}`);
+
+  if (reserva) {
+    const lista = await admin.request(`/bookings/admin?q=${encodeURIComponent(reserva.code)}`);
+    check('El listado del panel incluye la dirección', lista.data.items?.[0]?.serviceAddress === esperada,
+      `recibido ${JSON.stringify(lista.data.items?.[0]?.serviceAddress)}`);
+
+    const detalle = await admin.request(`/bookings/admin/${reserva.id}`);
+    check('El detalle del panel incluye la dirección', detalle.data.booking?.serviceAddress === esperada);
+
+    const consulta = await guest.request('/bookings/lookup', {
+      method: 'POST',
+      body: { code: reserva.code, email: 'prueba.domicilio@ejemplo.test' },
+    });
+    check('La consulta por código + correo incluye la dirección', consulta.data.booking?.serviceAddress === esperada,
+      `recibido ${JSON.stringify(consulta.data.booking?.serviceAddress)}`);
+
+    // Una reserva anterior al campo (sin dirección) sigue funcionando en
+    // la consulta y en el panel, incluido el correo de confirmación.
+    await prisma.booking.update({ where: { id: reserva.id }, data: { serviceAddress: null } });
+    const antigua = await guest.request('/bookings/lookup', {
+      method: 'POST',
+      body: { code: reserva.code, email: 'prueba.domicilio@ejemplo.test' },
+    });
+    check('Una reserva antigua sin dirección se consulta con serviceAddress: null',
+      antigua.status === 200 && 'serviceAddress' in antigua.data.booking && antigua.data.booking.serviceAddress === null);
+
+    const confirmada = await admin.request(`/bookings/admin/${reserva.id}/status`, {
+      method: 'PATCH',
+      body: { status: 'CONFIRMED' },
+    });
+    check('El panel confirma una reserva sin dirección', confirmada.status === 200 && confirmada.data.booking.status === 'CONFIRMED',
+      `recibido ${confirmada.status}: ${confirmada.data?.error ?? ''}`);
+  }
+}
+
+// ── 15. Adicional del domicilio ─────────────────────────────────────
+console.log('\n15. Adicional del domicilio (perímetro urbano)');
+{
+  const original = (await admin.request('/settings/admin')).data.settings.homeVisitFeeCents ?? null;
+  const fieldsOf = (res) => (res.data?.details ?? []).map((d) => d.field).join(', ');
+
+  try {
+    for (const malo of [-1, 2100000.5, 10_000_001, 'mucho']) {
+      const res = await admin.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: malo } });
+      check(`Un domicilio de ${JSON.stringify(malo)} se rechaza`, res.status === 400 && fieldsOf(res).includes('homeVisitFeeCents'),
+        `recibido ${res.status}: ${fieldsOf(res)}`);
+    }
+
+    const fijo = await admin.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: 2100000 } });
+    check('Un domicilio de $21.000 (2100000 centavos) se guarda',
+      fijo.status === 200 && fijo.data.settings.homeVisitFeeCents === 2100000, `recibido ${fijo.status}`);
+    check('La web pública recibe el valor del domicilio',
+      (await guest.request('/settings')).data.settings.homeVisitFeeCents === 2100000);
+
+    const texto = await admin.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: '1500000' } });
+    check('Llega como texto desde el formulario y se guarda como número', texto.data?.settings?.homeVisitFeeCents === 1500000);
+
+    const tope = await admin.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: 10_000_000 } });
+    check('El tope (10.000.000 centavos) se acepta', tope.status === 200 && tope.data.settings.homeVisitFeeCents === 10_000_000);
+
+    const cero = await admin.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: 0 } });
+    check('0 se guarda como 0 (domicilio sin costo), no como vacío', cero.status === 200 && cero.data.settings.homeVisitFeeCents === 0);
+
+    const vacio = await admin.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: '' } });
+    check('Vaciarlo lo deja en null (no en 0)', vacio.status === 200 && vacio.data.settings.homeVisitFeeCents === null);
+
+    await admin.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: 2100000 } });
+    const nulo = await admin.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: null } });
+    check('null se acepta', nulo.status === 200 && nulo.data.settings.homeVisitFeeCents === null);
+    const publico = (await guest.request('/settings')).data.settings;
+    check('Sin valor, la web pública recibe homeVisitFeeCents: null',
+      'homeVisitFeeCents' in publico && publico.homeVisitFeeCents === null);
+
+    const comoClienta = await client.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: 0 } });
+    check('Una clienta NO puede cambiar el domicilio', comoClienta.status === 403);
+  } finally {
+    await admin.request('/settings/admin', { method: 'PATCH', body: { homeVisitFeeCents: original } });
+  }
+  const restaurado = (await admin.request('/settings/admin')).data.settings.homeVisitFeeCents ?? null;
+  check('Se restaura el valor original del domicilio', restaurado === original, `quedó ${restaurado}`);
 }
 
 // ── Limpieza ────────────────────────────────────────────────────────

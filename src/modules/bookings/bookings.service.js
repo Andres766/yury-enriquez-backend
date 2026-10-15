@@ -1,10 +1,11 @@
 import prisma from '../../lib/prisma.js';
 import { getSettings } from '../settings/settings.service.js';
 import { DateTime, zonedDateTime, overlaps } from '../../lib/time.js';
-import { bookingHorizon, horizonDays } from '../availability/availability.service.js';
+import { bookingHorizon, horizonDays, isInSeason, seasonMessage } from '../availability/availability.service.js';
 import { badRequest, notFound, conflict, forbidden } from '../../lib/errors.js';
 import { generateBookingCode } from '../../lib/tokens.js';
 import { sendMailAsync } from '../../lib/mailer.js';
+import { h } from '../../lib/sanitize.js';
 import {
   bookingReceivedCustomer,
   bookingReceivedOwner,
@@ -18,7 +19,7 @@ const LIVE_STATUSES = ['PENDING', 'CONFIRMED', 'COMPLETED'];
 /**
  * Clave del bloqueo consultivo de Postgres.
  *
- * El estudio tiene una sola agenda, así que serializar la creación y la
+ * Yury tiene una sola agenda, así que serializar la creación y la
  * reprogramación de reservas con una única clave es suficiente y mucho
  * más simple que particionar por día. El bloqueo es *transaccional*
  * (`pg_advisory_xact_lock`): se libera solo al terminar la transacción,
@@ -69,6 +70,9 @@ export function toPublicBooking(booking) {
     customerEmail: booking.customerEmail,
     customerPhone: booking.customerPhone,
     notes: booking.notes,
+    // Dónde se hace el servicio (100 % a domicilio). Las reservas
+    // anteriores a este campo lo traen en null.
+    serviceAddress: booking.serviceAddress ?? null,
     service: booking.service,
     occasion: booking.occasion,
     createdAt: booking.createdAt,
@@ -98,7 +102,16 @@ async function assertSlotBookable(tx, { service, startAt, settings, ignoreBookin
     );
   }
 
-  // 2. Dentro del horizonte de reservas. Cada servicio puede tener el
+  // 2. Dentro de la temporada del servicio, si la tiene (catrinas: solo
+  // del 22 al 31 de octubre). Cuenta el día de la cita en la zona del
+  // negocio, no el día en que se reserva. Va antes que el horizonte para
+  // que, si fallan los dos, la clienta lea el motivo que no cambia con
+  // el tiempo.
+  if (!isInSeason(service, start.toISODate())) {
+    throw badRequest(seasonMessage(service), { code: 'OUT_OF_SEASON' });
+  }
+
+  // 3. Dentro del horizonte de reservas. Cada servicio puede tener el
   // suyo (las novias separan fecha con muchos meses de anticipación);
   // si no lo tiene, manda el general de Ajustes. Es la misma cuenta que
   // hace el calendario (bookingHorizon), para que nunca ofrezca un día
@@ -107,7 +120,7 @@ async function assertSlotBookable(tx, { service, startAt, settings, ignoreBookin
     throw badRequest(`Solo aceptamos reservas con ${horizonDays(service, settings)} días de antelación como máximo.`);
   }
 
-  // 3. Dentro de una franja de atención, con el servicio completo dentro.
+  // 4. Dentro de una franja de atención, con el servicio completo dentro.
   const dateISO = start.toISODate();
   const rules = await tx.availabilityRule.findMany({
     where: { weekday: start.weekday, active: true },
@@ -123,7 +136,7 @@ async function assertSlotBookable(tx, { service, startAt, settings, ignoreBookin
     throw conflict('Ese horario está fuera de nuestra agenda de atención.', { code: 'OUT_OF_HOURS' });
   }
 
-  // 4. El inicio debe caer en la rejilla de huecos, no en un minuto suelto.
+  // 5. El inicio debe caer en la rejilla de huecos, no en un minuto suelto.
   const gridBase = rules
     .map((rule) => zonedDateTime(dateISO, rule.startTime, tz))
     .filter((d) => d.isValid && d <= start)
@@ -139,7 +152,7 @@ async function assertSlotBookable(tx, { service, startAt, settings, ignoreBookin
   const startUtc = start.toUTC().toJSDate();
   const endUtc = end.toUTC().toJSDate();
 
-  // 5. Sin solape con reservas vivas.
+  // 6. Sin solape con reservas vivas.
   const clashing = await tx.booking.findFirst({
     where: {
       status: { in: LIVE_STATUSES },
@@ -153,7 +166,7 @@ async function assertSlotBookable(tx, { service, startAt, settings, ignoreBookin
     throw conflict('Ese horario acaba de ocuparse. Elige otro, por favor.', { code: 'SLOT_TAKEN' });
   }
 
-  // 6. Sin solape con bloqueos de agenda.
+  // 7. Sin solape con bloqueos de agenda.
   const blocks = await tx.timeBlock.findMany({
     where: { startAt: { lt: endUtc }, endAt: { gt: startUtc } },
     select: { startAt: true, endAt: true },
@@ -196,6 +209,8 @@ export async function createBooking(input, { userId = null, ip = null } = {}) {
         priceCents: true,
         currency: true,
         maxAdvanceDays: true,
+        availableFrom: true,
+        availableUntil: true,
       },
     });
     if (!service) throw notFound('El servicio seleccionado no está disponible');
@@ -225,6 +240,9 @@ export async function createBooking(input, { userId = null, ip = null } = {}) {
         customerEmail: input.customerEmail,
         customerPhone: input.customerPhone,
         notes: input.notes || null,
+        // Obligatoria en la reserva pública (lo exige el esquema); quien
+        // llame al servicio desde dentro del backend puede omitirla.
+        serviceAddress: input.serviceAddress || null,
         startAt: startUtc,
         endAt: endUtc,
         // El precio se toma SIEMPRE del catálogo, nunca del cliente:
@@ -311,7 +329,9 @@ export async function cancelOwnBooking({ bookingId, userId }) {
       to: ownerTo,
       subject: `Reserva cancelada por la clienta · ${updated.code}`,
       text: `${updated.customerName} canceló su cita del ${updated.startAt.toISOString()}.`,
-      html: `<p>${updated.customerName} canceló su cita.</p><p>Código: ${updated.code}</p>`,
+      // El nombre lo escribe la clienta: va escapado con `h`, como en las
+      // plantillas, para que un "<a href=…>" no llegue vivo al buzón de Yury.
+      html: h`<p>${updated.customerName} canceló su cita.</p><p>Código: ${updated.code}</p>`,
     });
   }
 
@@ -408,7 +428,9 @@ export async function rescheduleBooking({ id, startAt }) {
 
     const booking = await tx.booking.findUnique({
       where: { id },
-      include: { service: { select: { durationMinutes: true, maxAdvanceDays: true } } },
+      include: {
+        service: { select: { durationMinutes: true, maxAdvanceDays: true, availableFrom: true, availableUntil: true } },
+      },
     });
     if (!booking) throw notFound('Reserva no encontrada');
     if (booking.status === 'CANCELLED') throw badRequest('No se puede reprogramar una reserva cancelada');

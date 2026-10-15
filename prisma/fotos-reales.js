@@ -36,6 +36,8 @@ const PHOTOS = {
   'social-glitter-rosa-perfil': { alt: 'Perfil de un maquillaje fucsia con glitter dorado' },
   'catrina-media-cara': { alt: 'Media catrina con encaje negro, pedrería y labio mitad calavera' },
   'catrina-nina': { alt: 'Niña maquillada de catrina con corona de flores y velo negro', menor: true },
+  'halloween-vampira-nina': { alt: 'Niña con maquillaje de vampira', menor: true },
+  'halloween-joker-nino': { alt: 'Niño con maquillaje del Joker', menor: true },
 };
 
 /** slug del servicio → fotos (la primera es la portada de la tarjeta). */
@@ -50,6 +52,11 @@ const SERVICES = {
   'paquete-novia-maquillaje-peinado': ['novia-boda-iglesia', 'novia-peinado-mono-cristales', 'novia-maquillaje-velo'],
   'paquete-quinceanera': ['quince-corona-dorada-sonrisa', 'quince-peinado-ondas-tiara', 'quince-vestido-rosa-ramo'],
   'maquillaje-artistico-de-catrina': ['catrina-media-cara', 'catrina-nina'],
+  'pintucaritas-y-maquillaje-infantil': ['catrina-nina', 'halloween-vampira-nina', 'halloween-joker-nino'],
+  'taller-de-automaquillaje': ['social-ojos-calidos'],
+  'taller-verse-y-sentirse-bellas': ['noche-ahumado-morado'],
+  'bienestar-integrativo-para-novios': ['novia-boda-iglesia'],
+  'maquillaje-baby-shower-y-books': ['social-ojos-calidos'],
 };
 
 /** slug de la ocasión → foto de cabecera. */
@@ -69,6 +76,9 @@ const ADULT_SUBSTITUTE = {
   'quince-corona-dorada-sonrisa': 'social-ojos-calidos',
   'quince-peinado-ondas-tiara': 'novia-peinado-semirecogido-flores',
   'catrina-nina': 'catrina-media-cara',
+  // Sin fotos de niños, pintucaritas se queda con la catrina adulta
+  'halloween-vampira-nina': 'catrina-media-cara',
+  'halloween-joker-nino': 'catrina-media-cara',
 };
 
 function pick(id, sinMenores) {

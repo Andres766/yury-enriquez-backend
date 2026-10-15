@@ -29,6 +29,24 @@ export function cleanText(value, { maxLength = 2000 } = {}) {
     .slice(0, maxLength);
 }
 
+/**
+ * Como `cleanText`, pero deja el texto en UNA sola línea.
+ *
+ * Pensado para la dirección del servicio: viaja a la fila de una tabla
+ * de correo, al mensaje de WhatsApp y a la búsqueda de Google Maps, y en
+ * ninguno de esos sitios un salto de línea sirve de algo. Si la clienta
+ * escribió "Calle 18 # 25-30" y debajo "Barrio Centro", queda
+ * "Calle 18 # 25-30, Barrio Centro". No se recorta: la longitud la
+ * valida el esquema, que así puede rechazar en vez de cortar a ciegas.
+ */
+export function cleanLine(value, { maxLength = 2000 } = {}) {
+  return cleanText(value, { maxLength })
+    // Un bloque de saltos cuenta como UNO aunque entre ellos haya espacios
+    // ("Calle 1\n \nBarrio"): si no, quedaría "Calle 1, , Barrio".
+    .replace(/[ \t]*,?(?:[ \t]*\n)+[ \t]*/g, ', ')
+    .replace(/ {2,}/g, ' ');
+}
+
 /** Normaliza un correo: minúsculas y sin espacios. */
 export function cleanEmail(value) {
   return cleanText(value, { maxLength: 254 }).toLowerCase().replace(/\s/g, '');
