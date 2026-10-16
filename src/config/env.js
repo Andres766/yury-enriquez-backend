@@ -26,6 +26,14 @@ const csv = z
       .filter(Boolean),
   );
 
+/*
+ * Variable opcional en la que el vacío cuenta como ausente: en Render o
+ * en un .env copiado del ejemplo es normal dejar `CLAVE=` sin valor, y
+ * eso no debe parecer "configurada".
+ */
+const optionalText = (inner) =>
+  z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), inner.optional());
+
 const schema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -51,6 +59,26 @@ const schema = z
     SMTP_USER: z.string().optional(),
     SMTP_PASS: z.string().optional(),
     RESEND_API_KEY: z.string().optional(),
+
+    /*
+     * Cloudinary (fotos que Yury sube desde el panel). Las tres primeras
+     * van juntas: si falta cualquiera, la subida de fotos queda apagada
+     * y el resto de la web funciona igual. El nombre de la nube y la
+     * carpeta acaban dentro de URL, así que solo se admiten caracteres
+     * seguros. El secreto NUNCA sale del servidor.
+     */
+    CLOUDINARY_CLOUD_NAME: optionalText(
+      z.string().trim().regex(/^[a-z0-9_-]{1,64}$/i, 'CLOUDINARY_CLOUD_NAME solo admite letras, números, - y _'),
+    ),
+    CLOUDINARY_API_KEY: optionalText(z.string().trim().max(64)),
+    CLOUDINARY_API_SECRET: optionalText(z.string().trim().max(128)),
+    CLOUDINARY_FOLDER: optionalText(
+      z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/i, 'CLOUDINARY_FOLDER: letras, números, - y _, separados por /')
+        .max(100),
+    ).transform((v) => v ?? 'yury-enriquez'),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.JWT_ACCESS_SECRET === cfg.JWT_REFRESH_SECRET) {

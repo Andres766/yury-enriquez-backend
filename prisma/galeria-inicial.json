@@ -1,0 +1,222 @@
+[
+  {
+    "url": "/img/trabajos/novia-boda-iglesia-960.webp",
+    "alt": "Novia con maquillaje luminoso y recogido con ondas, a la entrada de la iglesia junto a un arco de rosas blancas",
+    "category": "novias",
+    "featured": true,
+    "focus": "35% 30%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 0
+  },
+  {
+    "url": "/img/trabajos/novia-maquillaje-velo-960.webp",
+    "alt": "Maquillaje de novia en tonos tierra con delineado sutil, diadema de cristal y velo",
+    "category": "novias",
+    "featured": false,
+    "focus": "50% 40%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 1
+  },
+  {
+    "url": "/img/trabajos/novia-peinado-mono-cristales-960.webp",
+    "alt": "Peinado de novia: moño bajo torcido con enredadera de cristales",
+    "category": "novias",
+    "featured": false,
+    "focus": "50% 45%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 2
+  },
+  {
+    "url": "/img/trabajos/novia-peinado-semirecogido-flores-960.webp",
+    "alt": "Peinado de novia semirecogido con trenzas torcidas, ondas y tocado de flores plateadas",
+    "category": "novias",
+    "featured": false,
+    "focus": "50% 30%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 3
+  },
+  {
+    "url": "/img/trabajos/quince-espalda-balcon-960.webp",
+    "alt": "Quinceañera de espaldas con vestido rosa de cola larga y corona, en un balcón al atardecer",
+    "category": "quinceaneras",
+    "featured": true,
+    "focus": "50% 40%",
+    "credit": "Foto: Silvio Maya Fotografía",
+    "minor": true,
+    "sortOrder": 4
+  },
+  {
+    "url": "/img/trabajos/quince-vestido-rosa-ramo-960.webp",
+    "alt": "Quinceañera con vestido rosa bordado, corona y ramo de rosas, maquillaje en tonos rosados",
+    "category": "quinceaneras",
+    "featured": false,
+    "focus": "50% 25%",
+    "credit": "Foto: Silvio Maya Fotografía",
+    "minor": true,
+    "sortOrder": 5
+  },
+  {
+    "url": "/img/trabajos/quince-corona-dorada-sonrisa-960.webp",
+    "alt": "Maquillaje de quinceañera natural y luminoso, con corona dorada y ondas sueltas",
+    "category": "quinceaneras",
+    "featured": false,
+    "focus": "50% 35%",
+    "credit": null,
+    "minor": true,
+    "sortOrder": 6
+  },
+  {
+    "url": "/img/trabajos/quince-corona-dorada-ojos-960.webp",
+    "alt": "Detalle de sombras rosadas y labios gloss en una quinceañera con corona dorada",
+    "category": "quinceaneras",
+    "featured": false,
+    "focus": "50% 35%",
+    "credit": null,
+    "minor": true,
+    "sortOrder": 7
+  },
+  {
+    "url": "/img/trabajos/quince-maquillaje-rosa-corona-960.webp",
+    "alt": "Maquillaje de quinceañera con sombras rosa y labios nude, corona de pedrería",
+    "category": "quinceaneras",
+    "featured": false,
+    "focus": "50% 40%",
+    "credit": null,
+    "minor": true,
+    "sortOrder": 8
+  },
+  {
+    "url": "/img/trabajos/quince-peinado-ondas-tiara-960.webp",
+    "alt": "Peinado de quinceañera semirecogido con ondas largas y tiara plateada",
+    "category": "quinceaneras",
+    "featured": false,
+    "focus": "50% 35%",
+    "credit": null,
+    "minor": true,
+    "sortOrder": 9
+  },
+  {
+    "url": "/img/trabajos/social-ojos-calidos-960.webp",
+    "alt": "Maquillaje social con sombras cálidas, delineado y pestañas, labios rosados",
+    "category": "social",
+    "featured": true,
+    "focus": "50% 35%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 10
+  },
+  {
+    "url": "/img/trabajos/noche-ahumado-morado-960.webp",
+    "alt": "Maquillaje de noche con ahumado morado y labios vino, cabello en ondas",
+    "category": "social",
+    "featured": false,
+    "focus": "50% 30%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 11
+  },
+  {
+    "url": "/img/trabajos/social-glitter-rosa-960.webp",
+    "alt": "Sombra fucsia difuminada con delineado en glitter dorado y labios gloss",
+    "category": "social",
+    "featured": false,
+    "focus": "50% 40%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 12
+  },
+  {
+    "url": "/img/trabajos/social-glitter-rosa-perfil-960.webp",
+    "alt": "Perfil de un maquillaje fucsia con glitter dorado en el párpado",
+    "category": "social",
+    "featured": false,
+    "focus": "50% 35%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 13
+  },
+  {
+    "url": "/img/trabajos/catrina-media-cara-960.webp",
+    "alt": "Media catrina: ojo con encaje negro y pedrería roja y plateada, labio mitad rojo y mitad calavera",
+    "category": "temporada",
+    "featured": true,
+    "focus": "50% 40%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 14
+  },
+  {
+    "url": "/img/trabajos/catrina-nina-960.webp",
+    "alt": "Niña maquillada de catrina con corona de flores de colores y velo negro",
+    "category": "temporada",
+    "featured": false,
+    "focus": "50% 25%",
+    "credit": null,
+    "minor": true,
+    "sortOrder": 15
+  },
+  {
+    "url": "/img/trabajos/halloween-payasos-grupo-960.webp",
+    "alt": "Grupo de amigos con maquillaje de payasos de terror para Halloween, bajo un túnel de luces",
+    "category": "temporada",
+    "featured": false,
+    "focus": "50% 30%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 16
+  },
+  {
+    "url": "/img/trabajos/halloween-payasos-ascensor-960.webp",
+    "alt": "Selfie de un grupo con maquillaje de payasos de Halloween",
+    "category": "temporada",
+    "featured": false,
+    "focus": "50% 50%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 17
+  },
+  {
+    "url": "/img/trabajos/halloween-payasa-960.webp",
+    "alt": "Maquillaje de payasa de terror con líneas rojas, nariz roja y sombras con brillo",
+    "category": "temporada",
+    "featured": false,
+    "focus": "50% 35%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 18
+  },
+  {
+    "url": "/img/trabajos/halloween-payaso-960.webp",
+    "alt": "Maquillaje de payaso de terror para hombre con líneas rojas",
+    "category": "temporada",
+    "featured": false,
+    "focus": "50% 30%",
+    "credit": null,
+    "minor": false,
+    "sortOrder": 19
+  },
+  {
+    "url": "/img/trabajos/halloween-vampira-nina-960.webp",
+    "alt": "Niña con maquillaje de vampira: piel pálida, ojos ahumados y gotas de sangre",
+    "category": "temporada",
+    "featured": false,
+    "focus": "50% 25%",
+    "credit": null,
+    "minor": true,
+    "sortOrder": 20
+  },
+  {
+    "url": "/img/trabajos/halloween-joker-nino-960.webp",
+    "alt": "Niño con maquillaje del Joker, cabello verde y sonrisa roja",
+    "category": "temporada",
+    "featured": false,
+    "focus": "50% 25%",
+    "credit": null,
+    "minor": true,
+    "sortOrder": 21
+  }
+]

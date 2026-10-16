@@ -153,6 +153,8 @@ model ServiceImage {
   url       String
   alt       String
   sortOrder Int    @default(0)
+  /// Punto que no se recorta (CSS object-position), p. ej. "50% 30%".
+  focus     String @default("50% 50%")
 
   service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
@@ -350,6 +352,13 @@ model Settings {
   /// Adicional del domicilio dentro del perímetro urbano, en centavos.
   /// Null = no se muestra. Fuera de la ciudad se cotiza aparte.
   homeVisitFeeCents      Int?
+  /// Fotos del inicio que Yury cambia desde el panel. Null = las de serie.
+  heroImageUrl           String?
+  heroImageAlt           String?
+  heroImageFocus         String?
+  aboutImageUrl          String?
+  aboutImageAlt          String?
+  aboutImageFocus        String?
   theme                  SiteTheme @default(LIGHT)
   /// Tema de temporada programado. Entre seasonalStartDate y
   /// seasonalEndDate (YYYY-MM-DD, ambos inclusive, en `timezone`) la web
@@ -387,3 +396,36 @@ model Testimonial {
 
   @@index([published, sortOrder])
 }
+
+// ── Biblioteca de fotos ─────────────────────────────────────────────
+
+/// Todas las fotos que Yury administra desde el panel: las que sube a
+/// Cloudinary y las que venían con la web (/img/trabajos/…, importadas).
+/// La galería «Mi trabajo» muestra las que tienen inGallery = true.
+model Photo {
+  id        String   @id @default(cuid())
+  /// public_id de Cloudinary. Null en las fotos que vienen con la web.
+  publicId  String?  @unique
+  /// secure_url de Cloudinary o ruta del propio sitio ("/img/…").
+  url       String
+  width     Int?
+  height    Int?
+  bytes     Int?
+  alt       String   @default("")
+  /// novias | quinceaneras | social | temporada (categorías de la galería)
+  category  String?
+  inGallery Boolean  @default(true)
+  featured  Boolean  @default(false)
+  /// Punto que no se recorta (CSS object-position)
+  focus     String   @default("50% 50%")
+  /// Crédito visible, p. ej. "Foto: Silvio Maya Fotografía"
+  credit    String?
+  /// Sale una persona menor de edad (requiere autorización del acudiente)
+  minor     Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([inGallery, category, sortOrder])
+}
+

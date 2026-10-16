@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { cleanText } from '../../lib/sanitize.js';
 import { isValidDateISO } from '../../lib/time.js';
+import { focusSchema, DEFAULT_FOCUS } from '../photos/photos.schema.js';
 
 export const SERVICE_CATEGORIES = ['MAQUILLAJE', 'PEINADO', 'PAQUETE', 'TALLER'];
 
@@ -36,6 +37,9 @@ const imageUrl = z
 const imageSchema = z.object({
   url: imageUrl,
   alt: text(160, 'Describe la imagen para accesibilidad'),
+  // Punto que no se recorta en las tarjetas (CSS object-position). Si el
+  // panel no lo manda, el centro: así una foto vieja sigue igual que antes.
+  focus: focusSchema.default(DEFAULT_FOCUS),
 });
 
 const cuid = z.string().min(20).max(40).regex(/^[a-z0-9]+$/i);

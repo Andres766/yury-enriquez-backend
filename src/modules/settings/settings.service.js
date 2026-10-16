@@ -115,5 +115,12 @@ export function publicSettings(settings) {
     maxAdvanceDays: settings.maxAdvanceDays,
     slotIntervalMinutes: settings.slotIntervalMinutes,
     bufferMinutes: settings.bufferMinutes,
+    // Fotos del inicio y de «Sobre mí» (null = la web usa las de serie).
+    heroImageUrl: settings.heroImageUrl ?? null,
+    heroImageAlt: settings.heroImageAlt ?? null,
+    heroImageFocus: settings.heroImageFocus ?? null,
+    aboutImageUrl: settings.aboutImageUrl ?? null,
+    aboutImageAlt: settings.aboutImageAlt ?? null,
+    aboutImageFocus: settings.aboutImageFocus ?? null,
   };
 }

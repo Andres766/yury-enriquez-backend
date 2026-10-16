@@ -7,6 +7,8 @@ import { asyncHandler, badRequest } from '../../lib/errors.js';
 import { cleanText, cleanEmail, cleanPhone } from '../../lib/sanitize.js';
 import { getSettings, updateSettings, publicSettings, adminSettings } from './settings.service.js';
 import { isValidDateISO } from '../../lib/time.js';
+import { isSitePath } from '../services/services.schema.js';
+import { altSchema, nullableFocusSchema } from '../photos/photos.schema.js';
 
 const router = Router();
 
@@ -24,6 +26,25 @@ const httpUrl = z
   .refine((v) => !v || /^https?:\/\//i.test(v), 'La URL debe empezar por http:// o https://')
   .optional()
   .or(z.literal(''));
+
+/**
+ * Foto del inicio o de «Sobre mí»: URL http(s) (Cloudinary) o ruta de
+ * esta web ("/img/…"). "//otro.com" y "/\otro.com" empiezan por "/"
+ * pero el navegador los lleva a otro dominio, así que se rechazan.
+ * Vacío o null = volver a la foto de serie.
+ */
+const pageImageUrl = z
+  .union([z.string().trim().max(500), z.null()], {
+    errorMap: () => ({ message: 'La URL de la foto debe empezar por https:// o /' }),
+  })
+  .refine(
+    (v) => !v || /^https?:\/\/[^\s"'<>]+$/i.test(v) || (isSitePath(v) && !/[\s"'<>]/.test(v)),
+    'La URL de la foto debe empezar por https:// o /',
+  )
+  .transform((v) => v || null);
+
+/** Texto alternativo de esa foto; vacío o null = el de serie. */
+const pageImageAlt = z.union([altSchema, z.null()]).transform((v) => v || null);
 
 /** Fecha de calendario YYYY-MM-DD; vacío o null la borra. */
 const calendarDate = z
@@ -118,6 +139,13 @@ const settingsBody = z.object({
   maxAdvanceDays: z.coerce.number().int().min(1).max(365),
   stampsRequired: z.coerce.number().int().min(2).max(50),
   rewardDescription: text(200),
+  // Fotos del inicio que Yury cambia desde el panel (null = las de serie).
+  heroImageUrl: pageImageUrl,
+  heroImageAlt: pageImageAlt,
+  heroImageFocus: nullableFocusSchema,
+  aboutImageUrl: pageImageUrl,
+  aboutImageAlt: pageImageAlt,
+  aboutImageFocus: nullableFocusSchema,
 });
 
 /** GET /api/settings — datos públicos de contacto, marca y reglas. */
