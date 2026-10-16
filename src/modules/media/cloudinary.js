@@ -96,6 +96,31 @@ export function verifyUploadResponse({ public_id: publicId, version, signature }
  * (la base manda), así que un fallo aquí solo deja un archivo huérfano
  * en Cloudinary, que se puede borrar a mano desde su panel.
  */
+/**
+ * Carpeta en la que Cloudinary guardó una foto, preguntándole con la
+ * clave secreta (Admin API). Hace falta en las cuentas nuevas, que usan
+ * «carpetas dinámicas»: ahí el parámetro firmado `folder` deja la foto en
+ * la carpeta pero NO antepone «carpeta/» al public_id, así que mirar el
+ * public_id no basta para saber de dónde viene. Devuelve null si
+ * Cloudinary no responde: en la duda, la subida se rechaza.
+ */
+export async function assetFolderOf(publicId, config = requireMediaConfig()) {
+  const path = publicId.split('/').map(encodeURIComponent).join('/');
+  const auth = Buffer.from(`${config.apiKey}:${config.apiSecret}`).toString('base64');
+  try {
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudName}/resources/image/upload/${path}`, {
+      headers: { Authorization: `Basic ${auth}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    return data?.asset_folder ?? data?.folder ?? null;
+  } catch (error) {
+    console.error('[cloudinary] No se pudo consultar la carpeta de %s: %s', publicId, error?.message ?? error);
+    return null;
+  }
+}
+
 export async function destroyImage(publicId) {
   const config = mediaConfig();
   if (!config.enabled) {

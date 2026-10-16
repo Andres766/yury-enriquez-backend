@@ -47,10 +47,22 @@ const realFetch = globalThis.fetch;
 const cloudinaryCalls = [];
 /** public_id para los que el "Cloudinary" de mentira responde con error. */
 const failDestroyFor = new Set();
+/** public_id → carpeta, para la consulta de carpetas dinámicas (Admin API). */
+const assetFolders = new Map();
+const folderLookups = [];
 
 globalThis.fetch = async (input, init = {}) => {
   const url = typeof input === 'string' ? input : input.url;
   if (new URL(url).hostname === 'api.cloudinary.com') {
+    const resource = new URL(url).pathname.split('/resources/image/upload/')[1];
+    if (resource) {
+      const pid = resource.split('/').map(decodeURIComponent).join('/');
+      folderLookups.push({ url, auth: init.headers?.Authorization });
+      return new Response(JSON.stringify({ public_id: pid, asset_folder: assetFolders.get(pid) ?? 'otra-carpeta' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
     const params = Object.fromEntries(new URLSearchParams(String(init.body ?? '')));
     cloudinaryCalls.push({ url, method: init.method, params });
     if (failDestroyFor.has(params.public_id)) {
@@ -331,6 +343,21 @@ try {
     const fuera = fakeUpload({ publicId: `otra-carpeta/e2e-${suffix}` });
     const resFuera = await admin.request('/photos/admin', { method: 'POST', body: fuera });
     check('public_id fuera de la carpeta: 400', resFuera.status === 400 && resFuera.data?.code === 'UPLOAD_FOLDER_INVALID', `recibido ${resFuera.status} ${resFuera.data?.code}`);
+
+    // Carpetas dinámicas (cuentas nuevas): public_id sin «carpeta/»,
+    // pero Cloudinary confirma que quedó en nuestra carpeta.
+    const dinamica = fakeUpload({ publicId: `e2e-dinamica-${suffix}` });
+    assetFolders.set(dinamica.public_id, FOLDER);
+    const resDinamica = await admin.request('/photos/admin', { method: 'POST', body: dinamica });
+    if (resDinamica.data?.photo?.id) created.push(resDinamica.data.photo.id);
+    const consulta = folderLookups.find((c) => c.url.includes(`/resources/image/upload/e2e-dinamica-${suffix}`));
+    check('Carpetas dinámicas: sin prefijo pero en nuestra carpeta: 201', resDinamica.status === 201, `recibido ${resDinamica.status} ${resDinamica.data?.code}`);
+    check('La consulta de carpeta usa la clave secreta (Basic) y no la expone', Boolean(consulta?.auth?.startsWith('Basic ')) && !JSON.stringify(resDinamica.data).includes(API_SECRET));
+    if (resDinamica.data?.photo?.id) await prisma.photo.delete({ where: { id: resDinamica.data.photo.id } });
+
+    const dinamicaAjena = fakeUpload({ publicId: `e2e-ajena-${suffix}` });
+    const resDinAjena = await admin.request("/photos/admin", { method: "POST", body: dinamicaAjena });
+    check("Carpetas dinámicas: sin prefijo y en otra carpeta: 400", resDinAjena.status === 400 && resDinAjena.data?.code === "UPLOAD_FOLDER_INVALID", `recibido ${resDinAjena.status} ${resDinAjena.data?.code}`);
 
     const prefijo = fakeUpload({ publicId: `${FOLDER}-falsa/e2e-${suffix}` });
     const resPrefijo = await admin.request('/photos/admin', { method: 'POST', body: prefijo });
@@ -646,6 +673,7 @@ try {
       OR: [
         { id: { in: created } },
         { publicId: { startsWith: `${FOLDER}/e2e-` } },
+        { publicId: { startsWith: 'e2e-dinamica-' } },
         { url: { startsWith: '/img/trabajos/e2e-' } },
       ],
     },

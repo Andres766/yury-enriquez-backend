@@ -5,7 +5,7 @@ import { validate } from '../../middleware/validate.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { requireCsrf } from '../../middleware/csrf.js';
 import { asyncHandler, badRequest, notFound } from '../../lib/errors.js';
-import { requireMediaConfig, verifyUploadResponse, destroyImage } from '../media/cloudinary.js';
+import { requireMediaConfig, assetFolderOf, verifyUploadResponse, destroyImage } from '../media/cloudinary.js';
 import { createPhotoSchema, updatePhotoSchema, orderSchema, cuid } from './photos.schema.js';
 import {
   publicPhotoSelect,
@@ -104,8 +104,14 @@ router.post(
     if (extension === null || !/^(?:\.[a-z0-9]{1,10})?$/i.test(extension)) {
       throw badRequest(NOT_VERIFIED, { code: 'UPLOAD_URL_INVALID' });
     }
+    // Cuentas con carpetas fijas: el public_id ya trae «carpeta/».
+    // Cuentas nuevas (carpetas dinámicas): no lo trae, así que se le
+    // pregunta a Cloudinary en qué carpeta quedó. Sin respuesta, se rechaza.
     if (!publicId.startsWith(`${config.folder}/`)) {
-      throw badRequest(NOT_VERIFIED, { code: 'UPLOAD_FOLDER_INVALID' });
+      const folder = await assetFolderOf(publicId, config);
+      if (folder !== config.folder) {
+        throw badRequest(NOT_VERIFIED, { code: 'UPLOAD_FOLDER_INVALID' });
+      }
     }
 
     // Reintento de la misma subida (se cortó la conexión justo después de
