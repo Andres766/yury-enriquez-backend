@@ -8,9 +8,6 @@ import { cleanText } from '../../lib/sanitize.js';
  * válido en un formulario y rechazado en otro.
  */
 
-/** Categorías de la galería «Mi trabajo» (mismas que los filtros de la web). */
-export const PHOTO_CATEGORIES = ['novias', 'quinceaneras', 'social', 'temporada'];
-
 export const DEFAULT_FOCUS = '50% 50%';
 
 const FOCUS_RE = /^(\d{1,3})% (\d{1,3})%$/;
@@ -49,11 +46,40 @@ export const creditSchema = z
   .union([oneLine(120), z.null()])
   .transform((v) => v || null);
 
+/**
+ * Las categorías viven en la tabla PhotoCategory (Yury crea las suyas):
+ * aquí solo se exige la forma del id; que exista se comprueba en la ruta
+ * (assertCategoryExists), contra la base.
+ */
+const CATEGORY_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const CATEGORY_ID_MAX = 40;
+
 export const categorySchema = z
-  .union([z.enum(PHOTO_CATEGORIES), z.literal(''), z.null()], {
-    errorMap: () => ({ message: 'Elige una categoría de la galería: novias, quinceañeras, social o temporada' }),
+  .union([z.string().max(CATEGORY_ID_MAX).regex(CATEGORY_ID_RE), z.literal(''), z.null()], {
+    errorMap: () => ({ message: 'Elige una categoría de la lista' }),
   })
   .transform((v) => v || null);
+
+/** Nombre de una categoría nueva, tal como sale en los filtros de la web. */
+export const createCategorySchema = z.object({
+  label: oneLine(40).pipe(z.string().min(2, 'Escribe un nombre de al menos 2 letras')),
+});
+
+/**
+ * "Maquillaje de Catrinas" → "maquillaje-de-catrinas": el id va en la URL
+ * de la galería (?categoria=…). Sin tildes ni símbolos; vacío si el
+ * nombre no tiene ni una letra o número.
+ */
+export function categoryIdFor(label) {
+  return label
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, CATEGORY_ID_MAX)
+    .replace(/-+$/, '');
+}
 
 /** Datos que Yury edita de cada foto. */
 export const photoMetaShape = {

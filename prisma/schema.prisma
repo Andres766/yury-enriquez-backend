@@ -412,7 +412,7 @@ model Photo {
   height    Int?
   bytes     Int?
   alt       String   @default("")
-  /// novias | quinceaneras | social | temporada (categorías de la galería)
+  /// id de PhotoCategory (novias, quinceaneras, social, temporada o una que creó Yury)
   category  String?
   inGallery Boolean  @default(true)
   featured  Boolean  @default(false)
@@ -427,5 +427,15 @@ model Photo {
   updatedAt DateTime @updatedAt
 
   @@index([inGallery, category, sortOrder])
+}
+
+/// Categorías de la galería «Mi trabajo» (los filtros de la web). Las
+/// cuatro de serie vienen en la migración; Yury puede crear más desde
+/// Panel → Fotos. El id es el que va en la URL (?categoria=novias).
+model PhotoCategory {
+  id        String   @id
+  label     String   @unique
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
 }
 

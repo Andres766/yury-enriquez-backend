@@ -6,13 +6,22 @@ import { requireAdmin } from '../../middleware/auth.js';
 import { requireCsrf } from '../../middleware/csrf.js';
 import { asyncHandler, badRequest, notFound } from '../../lib/errors.js';
 import { requireMediaConfig, assetFolderOf, verifyUploadResponse, destroyImage } from '../media/cloudinary.js';
-import { createPhotoSchema, updatePhotoSchema, orderSchema, cuid } from './photos.schema.js';
+import {
+  createPhotoSchema,
+  updatePhotoSchema,
+  orderSchema,
+  cuid,
+  createCategorySchema,
+  categoryIdFor,
+} from './photos.schema.js';
 import {
   publicPhotoSelect,
   PHOTO_ORDER,
   usageByUrl,
   listAdminPhotos,
   deletePhotoEverywhere,
+  listCategories,
+  assertCategoryExists,
 } from './photos.service.js';
 
 /**
@@ -41,17 +50,20 @@ function mediaEnabled(_req, _res, next) {
 
 // ── Público ──────────────────────────────────────────────────────────
 
-/** GET /api/photos — galería visible, en el orden que eligió Yury. */
+/** GET /api/photos — galería visible, en el orden que eligió Yury, y sus categorías. */
 router.get(
   '/',
   asyncHandler(async (_req, res) => {
-    const photos = await prisma.photo.findMany({
-      where: { inGallery: true },
-      orderBy: PHOTO_ORDER,
-      select: publicPhotoSelect,
-      take: 500,
-    });
-    res.json({ photos });
+    const [photos, categories] = await Promise.all([
+      prisma.photo.findMany({
+        where: { inGallery: true },
+        orderBy: PHOTO_ORDER,
+        select: publicPhotoSelect,
+        take: 500,
+      }),
+      listCategories(),
+    ]);
+    res.json({ photos, categories });
   }),
 );
 
@@ -61,7 +73,51 @@ router.get(
   '/admin',
   requireAdmin,
   asyncHandler(async (_req, res) => {
-    res.json({ photos: await listAdminPhotos() });
+    const [photos, categories] = await Promise.all([listAdminPhotos(), listCategories()]);
+    res.json({ photos, categories });
+  }),
+);
+
+/**
+ * POST /api/photos/admin/categories — Yury crea una categoría nueva
+ * desde la subida de fotos. Si ya hay una con ese nombre (aunque cambien
+ * tildes o mayúsculas), se devuelve esa en vez de duplicarla.
+ */
+router.post(
+  '/admin/categories',
+  requireAdmin,
+  requireCsrf,
+  validate({ body: createCategorySchema }),
+  asyncHandler(async (req, res) => {
+    const { label } = req.valid.body;
+    const id = categoryIdFor(label);
+    if (!id) {
+      throw badRequest('Revisa los datos enviados', {
+        code: 'VALIDATION_ERROR',
+        details: [{ field: 'label', message: 'El nombre necesita al menos una letra o número' }],
+      });
+    }
+
+    const select = { id: true, label: true };
+    const sameName = { OR: [{ id }, { label: { equals: label, mode: 'insensitive' } }] };
+    const existing = await prisma.photoCategory.findFirst({ where: sameName, select });
+    if (existing) return res.json({ category: existing, created: false });
+
+    // La nueva va al final de los filtros.
+    const last = await prisma.photoCategory.aggregate({ _max: { sortOrder: true } });
+    try {
+      const category = await prisma.photoCategory.create({
+        data: { id, label, sortOrder: (last._max.sortOrder ?? -1) + 1 },
+        select,
+      });
+      return res.status(201).json({ category, created: true });
+    } catch (error) {
+      // Dos toques seguidos de «Crear»: la otra petición ganó la carrera.
+      if (error?.code !== 'P2002') throw error;
+      const winner = await prisma.photoCategory.findFirst({ where: sameName, select });
+      if (!winner) throw error;
+      return res.json({ category: winner, created: false });
+    }
   }),
 );
 
@@ -119,6 +175,8 @@ router.post(
     const existing = await prisma.photo.findUnique({ where: { publicId } });
     if (existing) return res.json({ photo: existing });
 
+    await assertCategoryExists(meta.category);
+
     // Una foto nueva va al final: el orden que Yury ya armó no se mueve.
     const last = await prisma.photo.aggregate({ _max: { sortOrder: true } });
     const photo = await prisma.photo.create({
@@ -166,6 +224,7 @@ router.patch(
   requireCsrf,
   validate({ params: z.object({ id: cuid }), body: updatePhotoSchema }),
   asyncHandler(async (req, res) => {
+    await assertCategoryExists(req.valid.body.category);
     const photo = await prisma.photo.update({ where: { id: req.valid.params.id }, data: req.valid.body });
     res.json({ photo });
   }),

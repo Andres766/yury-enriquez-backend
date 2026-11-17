@@ -1,5 +1,30 @@
 import prisma from '../../lib/prisma.js';
+import { badRequest } from '../../lib/errors.js';
 import { getSettings, invalidateSettingsCache } from '../settings/settings.service.js';
+
+// ── Categorías ───────────────────────────────────────────────────────
+
+const CATEGORY_ORDER = [{ sortOrder: 'asc' }, { createdAt: 'asc' }];
+
+/** [{ id, label }] en el orden de los filtros de la web. */
+export function listCategories() {
+  return prisma.photoCategory.findMany({ orderBy: CATEGORY_ORDER, select: { id: true, label: true } });
+}
+
+/**
+ * La categoría que manda el panel tiene que existir: así una foto nunca
+ * queda en un filtro que la web no muestra. null (sin categoría) vale.
+ */
+export async function assertCategoryExists(id) {
+  if (!id) return;
+  const found = await prisma.photoCategory.findUnique({ where: { id }, select: { id: true } });
+  if (!found) {
+    throw badRequest('Esa categoría ya no existe. Recarga la página.', {
+      code: 'CATEGORY_NOT_FOUND',
+      details: [{ field: 'category', message: 'Esa categoría ya no existe. Recarga la página.' }],
+    });
+  }
+}
 
 /**
  * Dónde se está usando cada foto de la biblioteca.

@@ -12,6 +12,9 @@
  *    con los usos; con force=1 quita las referencias y llama a destroy).
  *  · Ajustes: foto del inicio y de «Sobre mí» (incluye "//evil").
  *  · Servicios: punto de enfoque de las fotos.
+ *  · Categorías: las de serie en /api/photos, crear una nueva (id para
+ *    la URL, sin duplicar por mayúsculas o tildes), usarla al subir y
+ *    editar, y rechazar las que no existen.
  *
  * NUNCA llama a Cloudinary de verdad: usa credenciales inventadas y
  * reemplaza globalThis.fetch para interceptar api.cloudinary.com. El
@@ -660,6 +663,79 @@ try {
       process.env.CLOUDINARY_API_SECRET = secret;
     }
   }
+
+  // ── 11. Categorías ──────────────────────────────────────────────────
+  console.log('\n11. Categorías que crea Yury');
+  {
+    const SERIE = ['novias', 'quinceaneras', 'social', 'temporada'];
+    const pub = await guest.request('/photos');
+    check(
+      'GET /photos trae las categorías, las de serie primero y en orden',
+      pub.status === 200 && SERIE.every((id, i) => pub.data?.categories?.[i]?.id === id),
+      JSON.stringify(pub.data?.categories?.slice(0, 4)),
+    );
+    const panel = await admin.request('/photos/admin');
+    check('GET /photos/admin también las trae', Array.isArray(panel.data?.categories) && panel.data.categories.length >= 4);
+
+    const anonima = await guest.request('/photos/admin/categories', { method: 'POST', body: { label: 'Intrusa' } });
+    check('Crear categoría sin sesión: 401', anonima.status === 401, `recibido ${anonima.status}`);
+
+    const nombre = `E2E Sesión de Fotos ${suffix}`;
+    const esperado = `e2e-sesion-de-fotos-${suffix}`;
+    const nueva = await admin.request('/photos/admin/categories', { method: 'POST', body: { label: `  ${nombre}  ` } });
+    check(
+      'Crear categoría: 201, id sin tildes para la URL y nombre limpio',
+      nueva.status === 201 && nueva.data?.created === true && nueva.data?.category?.id === esperado && nueva.data?.category?.label === nombre,
+      `recibido ${nueva.status} ${JSON.stringify(nueva.data)}`,
+    );
+
+    const repetida = await admin.request('/photos/admin/categories', {
+      method: 'POST',
+      body: { label: nombre.toLowerCase().replace('ó', 'o') },
+    });
+    check(
+      'El mismo nombre con otras mayúsculas o sin tilde devuelve la que ya está',
+      repetida.status === 200 && repetida.data?.created === false && repetida.data?.category?.id === esperado,
+      `recibido ${repetida.status} ${JSON.stringify(repetida.data)}`,
+    );
+    const deSerie = await admin.request('/photos/admin/categories', { method: 'POST', body: { label: 'NOVIAS' } });
+    check('«NOVIAS» no duplica la de serie', deSerie.status === 200 && deSerie.data?.category?.id === 'novias');
+
+    for (const [nombreCaso, label] of [
+      ['vacía', '   '],
+      ['de una letra', 'a'],
+      ['sin letras ni números', '¡¡!!'],
+      ['de más de 40 caracteres', 'x'.repeat(41)],
+    ]) {
+      const res = await admin.request('/photos/admin/categories', { method: 'POST', body: { label } });
+      check(`Categoría ${nombreCaso}: 400 en label`, res.status === 400 && fieldOf(res).includes('label'), `recibido ${res.status} ${JSON.stringify(res.data)}`);
+    }
+
+    const conNueva = await admin.request('/photos/admin', { method: 'POST', body: { ...fakeUpload(), category: esperado } });
+    if (conNueva.data?.photo?.id) created.push(conNueva.data.photo.id);
+    check('Se sube una foto directo a la categoría nueva', conNueva.status === 201 && conNueva.data?.photo?.category === esperado);
+
+    const fotoId = conNueva.data?.photo?.id;
+    const aSerie = await admin.request(`/photos/admin/${fotoId}`, { method: 'PATCH', body: { category: 'social' } });
+    const aNueva = await admin.request(`/photos/admin/${fotoId}`, { method: 'PATCH', body: { category: esperado } });
+    check('Se puede mover entre categorías de serie y nuevas', aSerie.status === 200 && aNueva.data?.photo?.category === esperado);
+
+    const fantasma = await admin.request(`/photos/admin/${fotoId}`, { method: 'PATCH', body: { category: `no-existe-${suffix}` } });
+    check(
+      'Categoría con buena forma pero que no existe: 400 CATEGORY_NOT_FOUND',
+      fantasma.status === 400 && fantasma.data?.code === 'CATEGORY_NOT_FOUND' && fieldOf(fantasma).includes('category'),
+      `recibido ${fantasma.status} ${fantasma.data?.code}`,
+    );
+
+    const despues = await guest.request('/photos');
+    const lista = despues.data?.categories ?? [];
+    check(
+      'La web pública ya la ve, al final de los filtros',
+      lista.at(-1)?.id === esperado && Object.keys(lista.at(-1)).sort().join(',') === 'id,label',
+      JSON.stringify(lista.at(-1)),
+    );
+    check('Y la foto sale con esa categoría', despues.data?.photos?.find((p) => p.id === fotoId)?.category === esperado);
+  }
 } catch (error) {
   failed += 1;
   console.log(`\n  \x1b[31m✖\x1b[0m Error inesperado: ${error.stack ?? error}`);
@@ -683,6 +759,7 @@ try {
   if (occasionId) await prisma.occasion.deleteMany({ where: { id: occasionId } });
   await prisma.occasion.deleteMany({ where: { slug: { startsWith: 'e2e-fotos-' } } });
   await prisma.user.deleteMany({ where: { email: clientEmail } });
+  await prisma.photoCategory.deleteMany({ where: { id: { startsWith: 'e2e-' } } });
   await prisma.settings.update({ where: { id: 1 }, data: originalSettings });
   invalidateSettingsCache();
 
