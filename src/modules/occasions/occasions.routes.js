@@ -4,7 +4,7 @@ import prisma from '../../lib/prisma.js';
 import { validate } from '../../middleware/validate.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { requireCsrf } from '../../middleware/csrf.js';
-import { asyncHandler, notFound } from '../../lib/errors.js';
+import { asyncHandler, badRequest, conflict, notFound } from '../../lib/errors.js';
 import { cleanText } from '../../lib/sanitize.js';
 import { isSitePath } from '../services/services.schema.js';
 
@@ -13,7 +13,9 @@ import { isSitePath } from '../services/services.schema.js';
  *
  * Alimentan la sección "Para cada ocasión" de la web y se pueden
  * asociar a los servicios, de modo que cada ocasión muestra qué se
- * ofrece para ella.
+ * ofrece para ella. Yury crea las suyas desde el panel; la dirección
+ * (/ocasiones/<slug>) sale del nombre y no cambia al renombrarla, porque
+ * ya puede estar en enlaces de Instagram o WhatsApp.
  */
 
 const router = Router();
@@ -25,6 +27,34 @@ const text = (max, msg) =>
     .pipe(z.string().min(1, msg ?? 'Este campo es obligatorio').max(max));
 
 const cuid = z.string().min(20).max(40).regex(/^[a-z0-9]+$/i);
+
+/** "Día de la Madre" → "dia-de-la-madre": la dirección /ocasiones/<slug>. */
+function slugify(value) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 56)
+    .replace(/-+$/, '');
+}
+
+/** El slug del nombre; si ya lo usa otra ocasión, con -2, -3… */
+async function uniqueSlug(name) {
+  const base = slugify(name);
+  if (!base) {
+    throw badRequest('Revisa los datos enviados', {
+      code: 'VALIDATION_ERROR',
+      details: [{ field: 'name', message: 'El nombre necesita al menos una letra o número' }],
+    });
+  }
+  for (let n = 1; ; n += 1) {
+    const slug = n === 1 ? base : `${base}-${n}`;
+    const found = await prisma.occasion.findUnique({ where: { slug }, select: { id: true } });
+    if (!found) return slug;
+  }
+}
 
 /**
  * Viñetas de "Qué incluye": igual que en los servicios, las filas vacías
@@ -39,10 +69,12 @@ const includesList = z
   .pipe(z.array(z.string()).max(12, 'Máximo 12 viñetas'));
 
 const occasionBody = {
+  // Al crear desde el panel no se manda: se arma con el nombre.
   slug: z
     .string()
     .max(60)
-    .regex(/^[a-z0-9-]+$/, 'Usa solo minúsculas, números y guiones'),
+    .regex(/^[a-z0-9-]+$/, 'Usa solo minúsculas, números y guiones')
+    .optional(),
   name: text(80, 'Escribe el nombre'),
   tagline: text(160, 'Escribe la frase corta'),
   description: text(2000, 'Escribe la descripción'),
@@ -152,11 +184,22 @@ router.post(
   '/admin',
   requireAdmin,
   requireCsrf,
-  validate({ body: z.object(occasionBody) }),
+  validate({ body: z.object({ ...occasionBody, sortOrder: occasionBody.sortOrder.optional() }) }),
   asyncHandler(async (req, res) => {
-    const { heroImage, ...data } = req.valid.body;
+    const { heroImage, slug: requested, sortOrder, ...data } = req.valid.body;
+    if (requested && (await prisma.occasion.findUnique({ where: { slug: requested }, select: { id: true } }))) {
+      throw conflict('Ya hay una ocasión con esa dirección');
+    }
+    const slug = requested || (await uniqueSlug(data.name));
+    // Sin orden elegido, la nueva va de última.
+    const last = sortOrder === undefined ? await prisma.occasion.aggregate({ _max: { sortOrder: true } }) : null;
     const occasion = await prisma.occasion.create({
-      data: { ...data, heroImage: heroImage || null },
+      data: {
+        ...data,
+        slug,
+        sortOrder: sortOrder ?? Math.min(999, (last._max.sortOrder ?? -1) + 1),
+        heroImage: heroImage || null,
+      },
     });
     res.status(201).json({ occasion });
   }),
@@ -183,7 +226,20 @@ router.delete(
   requireCsrf,
   validate({ params: z.object({ id: cuid }) }),
   asyncHandler(async (req, res) => {
-    await prisma.occasion.delete({ where: { id: req.valid.params.id } });
+    const { id } = req.valid.params;
+    const occasion = await prisma.occasion.findUnique({ where: { id }, select: { id: true } });
+    if (!occasion) throw notFound('Esa ocasión ya no existe. Recarga la página.');
+    // Borrarla dejaría esas reservas sin ocasión (perderíamos el dato):
+    // con reservas solo se puede ocultar.
+    const bookings = await prisma.booking.count({ where: { occasionId: id } });
+    if (bookings > 0) {
+      throw conflict(
+        `Esta ocasión tiene ${bookings} ${bookings === 1 ? 'reserva' : 'reservas'}, así que no se puede borrar. Ocúltala para que deje de salir en la web.`,
+        { code: 'OCCASION_HAS_BOOKINGS' },
+      );
+    }
+    // Los servicios no se borran: solo dejan de estar enlazados a ella.
+    await prisma.occasion.delete({ where: { id } });
     res.json({ ok: true });
   }),
 );

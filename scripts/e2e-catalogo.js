@@ -452,6 +452,62 @@ try {
         (sigueEnPanel.data?.occasions ?? []).some((item) => item.id === o.id && item.active === false),
     );
 
+    // Ocasiones que crea Yury: dirección armada con el nombre, sin pisar
+    // otra, de última si no elige orden; borrar solo sin reservas.
+    const nueva = {
+      name: 'Día de la Madre E2E',
+      tagline: 'Para consentir a mamá',
+      description: 'Maquillaje para el almuerzo familiar.',
+    };
+    const creada = await admin.request('/occasions/admin', { method: 'POST', body: nueva });
+    const c1 = creada.data?.occasion;
+    const maxOrden = Math.max(...listado.map((item) => item.sortOrder));
+    check(
+      'Crear ocasión sin dirección: la arma con el nombre y la pone de última',
+      creada.status === 201 && c1?.slug === 'dia-de-la-madre-e2e' && c1?.sortOrder === maxOrden + 1 && c1?.active === true,
+      `recibido ${creada.status} ${JSON.stringify({ slug: c1?.slug, sortOrder: c1?.sortOrder, details: creada.data?.details })}`,
+    );
+    const otra = await admin.request('/occasions/admin', { method: 'POST', body: { ...nueva, name: 'día de la madre e2e' } });
+    check('Con el mismo nombre no pisa la dirección (-2)', otra.status === 201 && otra.data?.occasion?.slug === 'dia-de-la-madre-e2e-2');
+    const publicaNueva = await guest.request('/occasions/dia-de-la-madre-e2e');
+    check('La nueva ya tiene su página pública', publicaNueva.status === 200 && publicaNueva.data?.occasion?.name === nueva.name);
+    const sinNombre = await admin.request('/occasions/admin', { method: 'POST', body: { ...nueva, name: '¡¡!!' } });
+    check('Nombre sin letras ni números: 400 en name', sinNombre.status === 400 && fieldsOf(sinNombre).includes('name'));
+    const sinTextos = await admin.request('/occasions/admin', { method: 'POST', body: { name: 'Incompleta E2E' } });
+    check('Sin frase ni descripción: 400', sinTextos.status === 400 && fieldsOf(sinTextos).includes('tagline'));
+    const crearClienta = await client.request('/occasions/admin', { method: 'POST', body: nueva });
+    check('Una clienta no puede crear ocasiones', crearClienta.status === 403);
+
+    const servicioCualquiera = await prisma.service.findFirst({ select: { id: true, priceCents: true } });
+    const reserva = await prisma.booking.create({
+      data: {
+        code: `E2EOCC${Date.now().toString(36).toUpperCase()}`,
+        serviceId: servicioCualquiera.id,
+        occasionId: otra.data.occasion.id,
+        customerName: 'Prueba E2E',
+        customerEmail: clientEmail,
+        customerPhone: '3000000000',
+        startAt: new Date('2030-01-10T15:00:00Z'),
+        endAt: new Date('2030-01-10T16:00:00Z'),
+        paymentMethod: 'EFECTIVO',
+        priceCents: servicioCualquiera.priceCents,
+      },
+    });
+    const conReserva = await admin.request(`/occasions/admin/${otra.data.occasion.id}`, { method: 'DELETE' });
+    check(
+      'Borrar una ocasión con reservas: 409 y sigue ahí',
+      conReserva.status === 409 &&
+        conReserva.data?.code === 'OCCASION_HAS_BOOKINGS' &&
+        Boolean(await prisma.occasion.findUnique({ where: { id: otra.data.occasion.id } })),
+      `recibido ${conReserva.status} ${conReserva.data?.code}`,
+    );
+    await prisma.booking.delete({ where: { id: reserva.id } });
+
+    const borrada = await admin.request(`/occasions/admin/${c1.id}`, { method: 'DELETE' });
+    const yaNoEsta = await guest.request('/occasions/dia-de-la-madre-e2e');
+    check('Borrar una ocasión sin reservas', borrada.status === 200 && yaNoEsta.status === 404);
+    await prisma.occasion.deleteMany({ where: { slug: { startsWith: 'dia-de-la-madre-e2e' } } });
+
     // El chip "Ideal para" de la ficha no puede llevar a una ocasión
     // oculta, pero el panel conserva el enlace para no perderlo al guardar.
     const enlazado = o.services?.find((item) => item.active);
@@ -501,6 +557,8 @@ try {
       });
       check('Ocasión restaurada', res.status === 200, `recibido ${res.status}: ${fieldsOf(res)}`);
     }
+    await prisma.booking.deleteMany({ where: { code: { startsWith: 'E2EOCC' } } });
+    await prisma.occasion.deleteMany({ where: { slug: { startsWith: 'dia-de-la-madre-e2e' } } });
     await prisma.user.deleteMany({ where: { email: clientEmail } });
     console.log('  Listo.');
   } catch (error) {
