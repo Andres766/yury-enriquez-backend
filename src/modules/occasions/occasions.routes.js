@@ -59,6 +59,15 @@ const occasionBody = {
       'La URL debe empezar por http://, https:// o /',
     )
     .optional(),
+  // «Desde $X» de la tarjeta, en centavos. null = automático (el servicio
+  // más barato de la ocasión).
+  priceFromCents: z
+    .number({ invalid_type_error: 'Escribe el precio en números' })
+    .int('Escribe el precio sin decimales')
+    .min(100_000, 'Mínimo $ 1.000')
+    .max(100_000_000, 'Máximo $ 1.000.000')
+    .nullable()
+    .optional(),
   sortOrder: z.coerce.number().int().min(0).max(999).default(0),
   active: z.boolean().default(true),
 };
@@ -126,7 +135,12 @@ router.get(
       include: {
         services: {
           orderBy: { service: { sortOrder: 'asc' } },
-          include: { service: { select: { id: true, slug: true, name: true, active: true } } },
+          // Con precio: el editor muestra qué «Desde» saldría en automático.
+          include: {
+            service: {
+              select: { id: true, slug: true, name: true, active: true, priceCents: true, currency: true, priceMode: true },
+            },
+          },
         },
       },
     });

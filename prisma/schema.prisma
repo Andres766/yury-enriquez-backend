@@ -170,6 +170,9 @@ model Occasion {
   description String
   includes    String[] // viñetas de "qué incluye"
   heroImage   String?
+  /// «Desde $X» escrito por Yury para la tarjeta. Null = se calcula con el
+  /// servicio más barato de la ocasión.
+  priceFromCents Int?
   sortOrder   Int      @default(0)
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())

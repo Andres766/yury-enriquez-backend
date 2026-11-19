@@ -383,10 +383,29 @@ try {
         description: o.description,
         includes: o.includes,
         heroImage: o.heroImage ?? '',
+        priceFromCents: o.priceFromCents ?? null,
         active: o.active,
         sortOrder: o.sortOrder,
       },
     };
+
+    check(
+      'El panel trae el precio de los servicios de cada ocasión (para el «Desde» automático)',
+      o.services.every((s) => typeof s.priceCents === 'number' && 'priceMode' in s),
+    );
+    const conPrecio = await admin.request(`/occasions/admin/${o.id}`, { method: 'PATCH', body: { priceFromCents: 12_000_000 } });
+    const publicaConPrecio = await guest.request(`/occasions/${o.slug}`);
+    check(
+      'Precio «desde» escrito a mano: se guarda y sale en la web',
+      conPrecio.status === 200 && conPrecio.data.occasion.priceFromCents === 12_000_000 && publicaConPrecio.data?.occasion?.priceFromCents === 12_000_000,
+      `recibido ${conPrecio.status} ${JSON.stringify(conPrecio.data?.details ?? conPrecio.data?.occasion?.priceFromCents)}`,
+    );
+    for (const [caso, valor] of [['negativo', -100], ['con centavos', 12_000_050.5], ['menor a $ 1.000', 50_000], ['en texto', '120000']]) {
+      const res = await admin.request(`/occasions/admin/${o.id}`, { method: 'PATCH', body: { priceFromCents: valor } });
+      check(`Precio «desde» ${caso}: 400`, res.status === 400 && fieldsOf(res).includes('priceFromCents'), `recibido ${res.status}`);
+    }
+    const automatico = await admin.request(`/occasions/admin/${o.id}`, { method: 'PATCH', body: { priceFromCents: null } });
+    check('null lo vuelve automático', automatico.status === 200 && automatico.data.occasion.priceFromCents === null);
 
     const cambio = await admin.request(`/occasions/admin/${o.id}`, {
       method: 'PATCH',
